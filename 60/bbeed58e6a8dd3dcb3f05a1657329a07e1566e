@@ -1,0 +1,20 @@
+AGENTS.md
+  s_a2c56d03f2148a::t_0e4cbeb384560b 7,17
+  s_a2c56d03f2148a::t_46156a9d54a9ea 1-6,8-16,18-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "60bbeed58e6a8dd3dcb3f05a1657329a07e1566e",
+  "prompts": {},
+  "sessions": {
+    "s_a2c56d03f2148a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe15b-a471-7261-8140-e934c365602b",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    }
+  }
+}
