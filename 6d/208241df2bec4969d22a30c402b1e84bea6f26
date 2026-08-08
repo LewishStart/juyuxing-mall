@@ -1,0 +1,33 @@
+.agents/skills/juyuxing-mall-bootstrap/agents/openai.yaml
+  s_a2c56d03f2148a::t_61c772baf6d8aa 5-6
+  s_a2c56d03f2148a::t_4914405d6114ad 1-4
+.agents/skills/juyuxing-mall-debug/agents/openai.yaml
+  s_a2c56d03f2148a::t_61c772baf6d8aa 5-6
+  s_a2c56d03f2148a::t_4914405d6114ad 1-4
+.agents/skills/juyuxing-mall-bootstrap/SKILL.md
+  s_a2c56d03f2148a::t_61c772baf6d8aa 3,8,10,12,14-19,23,25,27,29,31,33
+  s_a2c56d03f2148a::t_4914405d6114ad 1-2,4-7,9,11,13,20,24,26,28,30,32
+  s_a2c56d03f2148a::t_3270204a13c343 21-22
+.agents/skills/juyuxing-mall-project.md
+  s_a2c56d03f2148a::t_61c772baf6d8aa 1-21
+.agents/skills/juyuxing-mall-debug/SKILL.md
+  s_a2c56d03f2148a::t_61c772baf6d8aa 3,8,10,12,14-15,20,22,24,26,28
+  s_a2c56d03f2148a::t_4914405d6114ad 1-2,4-7,9,11,13,19,21,23,25,27
+  s_a2c56d03f2148a::t_7e14b490b8073e 16-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "6d208241df2bec4969d22a30c402b1e84bea6f26",
+  "prompts": {},
+  "sessions": {
+    "s_a2c56d03f2148a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe15b-a471-7261-8140-e934c365602b",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    }
+  }
+}
