@@ -1,0 +1,28 @@
+scripts/page-load-logic-test.js
+  s_5c356bb9517204::t_5c3f4f296db440 211-212,243
+  s_5c356bb9517204::t_b47ce9e59e4eb2 43
+  s_5c356bb9517204::t_1066e58f1ab67b 42,201-210,213-242,244-248,250-254,259
+  s_5c356bb9517204::t_16ecbfc77ebf53 249
+cloudfunctions/cart/index.js
+  s_5c356bb9517204::t_d22e314803f701 17-18,21-29,31-44
+miniprogram/pages/cart/cart.js
+  s_5c356bb9517204::t_1849dbc0d57abe 2-10,28-48,51-77,80-81,83-85,140-141,143,151-152,154,164-165,167
+scripts/smoke-test.js
+  s_5c356bb9517204::t_ecbf87ab4dc6d0 168-169,216-229
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "41c37a33b7f805f2d212dfd0cdfd0406d39571be",
+  "prompts": {},
+  "sessions": {
+    "s_5c356bb9517204": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a000a2-96cb-70d0-9cd6-f857297464ae",
+        "model": "gpt-5.5"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    }
+  }
+}
