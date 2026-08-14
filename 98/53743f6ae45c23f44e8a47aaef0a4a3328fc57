@@ -1,0 +1,31 @@
+cloudfunctions/order/index.js
+  s_5c356bb9517204::t_1f2c074858ea58 146-158
+scripts/page-load-logic-test.js
+  s_5c356bb9517204::t_f6f2a2a6c6de91 44,148-199,203
+miniprogram/pages/user/user.js
+  s_5c356bb9517204::t_cac3260435cd7d 4-28,37,41,57-63,65-68,70,87-96,98-101
+  s_5c356bb9517204::t_b73f999a8cffa7 48,127,166
+scripts/smoke-test.js
+  s_5c356bb9517204::t_9819f32a42bd28 167,207-212
+  s_5c356bb9517204::t_1bd4dc1e1f88fc 213
+scripts/e2e-mock.js
+  s_5c356bb9517204::t_842ecfd2e19756 360-364
+miniprogram/utils/api.js
+  s_5c356bb9517204::t_6e0a1a4e9dc972 28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9853743f6ae45c23f44e8a47aaef0a4a3328fc57",
+  "prompts": {},
+  "sessions": {
+    "s_5c356bb9517204": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a000a2-96cb-70d0-9cd6-f857297464ae",
+        "model": "gpt-5.5"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    }
+  }
+}
