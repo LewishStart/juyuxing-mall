@@ -1,0 +1,84 @@
+scripts/e2e-mock.js
+  s_5c356bb9517204::t_449bdd7759c59b 202-209,269,275
+  s_5c356bb9517204::t_99b64fef0fe267 266-268,270,291
+  s_5c356bb9517204::t_ba07f222c402b8 285-287,289
+  s_1cfce9459d06ed::t_7a57798e7b2ddf 15,278-280,282
+  s_5c356bb9517204::t_910044460ea16d 265,271-274,276-277,288,290
+  s_5c356bb9517204::t_296d3d64b03207 281,283-284
+miniprogram/pages/index/index.wxml
+  s_5c356bb9517204::t_ff0a5e3ff70441 21
+miniprogram/utils/api.js
+  s_5c356bb9517204::t_c65b3bcf603323 19,73
+  s_5c356bb9517204::t_4bcb0b43488629 17-18
+cloudfunctions/banner/package.json
+  s_5c356bb9517204::t_4bcb0b43488629 1-7
+miniprogram/pages/index/index.js
+  s_5c356bb9517204::t_c65b3bcf603323 142
+  s_5c356bb9517204::t_6846b759e84373 39,42-44,46,49-59,81-83,93,97,100,210-223
+  s_5c356bb9517204::t_071dfc29463e3d 128,158-159
+  s_5c356bb9517204::t_f5cda50a91ea31 30-34
+  s_5c356bb9517204::t_f380de6f8a752f 60-80
+  s_5c356bb9517204::t_26d806fcde58bf 35-38,40-41,84-91,98,102-105,171-176,184-187,192
+  s_5c356bb9517204::t_4bcb0b43488629 4-29,123-124,133-138,164-165,167,177-183,188-191,193-195,277-278
+  s_5c356bb9517204::t_97b70296e486fb 45,47-48,92,94-96,99,101
+  s_5c356bb9517204::t_dd23b35e8f9e6c 168-170
+  s_5c356bb9517204::t_162994bfeb5f44 144
+  s_5c356bb9517204::t_051916e40ef332 224-225
+miniprogram/pages/search/search.js
+  s_5c356bb9517204::t_c65b3bcf603323 48-56
+scripts/page-load-logic-test.js
+  s_5c356bb9517204::t_c020722ffa5479 56,58-62,67-69,81,86,104,124
+  s_5c356bb9517204::t_607106e16304f0 1-9,11-14,29-55,70-80,82-85,87-88,95-98,103,105,108,113-123,125-128,130-132,134-152
+  s_5c356bb9517204::t_0ee920685a0a19 89,91,93,112
+  s_5c356bb9517204::t_c155dc39e11766 15-28,57,63-66,90,92,94
+  s_5c356bb9517204::t_e4972965529401 10,107
+  s_5c356bb9517204::t_cee934727cbbdf 99-102,106,109-111,129,133
+cloudfunctions/banner/index.js
+  s_5c356bb9517204::t_16fb426e56ca5f 17,30-31,52
+  s_5c356bb9517204::t_48a7ece8d237d4 8,11,32-45,53-54
+  s_5c356bb9517204::t_4bcb0b43488629 1-7,9-10,12-16,46-51,55-59
+  s_1cfce9459d06ed::t_fa50313e28c70d 18-29
+scripts/smoke-test.js
+  s_5c356bb9517204::t_28b5185f5d56fa 43-44,165,170,177-178,180,187-190,192
+  s_5c356bb9517204::t_99b64fef0fe267 166-169,174,176,179,181,191,193-206
+  s_1cfce9459d06ed::t_8910d9be77a5c4 171-173,175
+  s_5c356bb9517204::t_3a47ccc40f2d10 182-186
+miniprogram/pages/index/index.wxss
+  s_5c356bb9517204::t_e158f8987e8fcf 142
+miniprogram/components/skeleton/skeleton.wxml
+  s_5c356bb9517204::t_7ba765d71ee876 3,10,32
+cloudfunctions/banner/package-lock.json
+  s_62ef11b98d8937::t_3a84d2dcd24dce 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "3ce737cf82f3f5a7f5b854844a3d198f1ac3b54c",
+  "prompts": {},
+  "sessions": {
+    "s_1cfce9459d06ed": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00137-7a5e-7371-bc29-b2bf0469c613",
+        "model": "deepseek-v4-pro"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    },
+    "s_5c356bb9517204": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a000a2-96cb-70d0-9cd6-f857297464ae",
+        "model": "gpt-5.5"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    },
+    "s_62ef11b98d8937": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00117-328b-7d13-91a1-1bb739acfcef",
+        "model": "unknown"
+      },
+      "human_author": "sundong.100 <sundong.100@jd.com>"
+    }
+  }
+}
