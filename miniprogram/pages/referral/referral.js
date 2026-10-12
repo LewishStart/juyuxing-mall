@@ -48,7 +48,7 @@ Page({
   onShareAppMessage() {
     const openId = this.data.openId || wx.getStorageSync('openId') || '';
     return {
-      title: '橘与杏中医生活 - 自然舒缓好物',
+      title: '林元元中医生活 - 自然舒缓好物',
       path: `/pages/index/index?ref=${openId}`,
       imageUrl: '/images/share-banner.png'
     };

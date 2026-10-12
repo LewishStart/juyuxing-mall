@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // =============================================================
-// 橘与杏商城 · 端到端 mock 验证
+// 林元元商城 · 端到端 mock 验证
 // 运行: node scripts/e2e-mock.js
 //
 // 把 wx-server-sdk 用内存数据库替换,串起所有云函数,
@@ -30,6 +30,7 @@ const db = {
 // 业务操作符
 const commandOps = {
   inc(n) { return { __op: 'inc', value: n }; },
+  set(v) { return { __op: 'set', value: v }; },
   in(arr) { return { __op: 'in', value: arr }; },
   neq(v) { return { __op: 'neq', value: v }; },
   eq(v) { return { __op: 'eq', value: v }; },
@@ -93,6 +94,8 @@ function applyUpdate(doc, data) {
     const field = parts[parts.length - 1];
     if (v && typeof v === 'object' && v.__op === 'inc') {
       target[field] = (Number(target[field]) || 0) + Number(v.value || 0);
+    } else if (v && typeof v === 'object' && v.__op === 'set') {
+      target[field] = v.value;
     } else {
       target[field] = v;
     }
@@ -284,7 +287,7 @@ function generateOrderNo() {
 
 // ============== 主流程 ==============
 async function main() {
-  console.log('橘与杏 E2E Mock 验证\n');
+  console.log('林元元 E2E Mock 验证\n');
   header('Step 1: 初始化（自动 seed）');
   setOpenId('mock-customer');
   const initRes = (await call('init', { action: 'init' })).result;
@@ -478,7 +481,8 @@ async function main() {
   })).result;
   step('支付回调金额不一致时拒绝入账', wrongAmountNotify.errcode !== 0);
   const wrongPayerNotify = (await call('payNotify', {
-    outTradeNo: orderNo, transactionId: 'WRONG_PAYER_TXN', openid: 'mock-customer-A',
+    outTradeNo: orderNo, transactionId: 'WRONG_PAYER_TXN',
+    openid: 'mock-platform-payer', subOpenid: 'mock-customer-A',
     totalFee: orderDoc.totalFee, resultCode: 'SUCCESS', returnCode: 'SUCCESS'
   })).result;
   step('支付回调付款身份不一致时拒绝入账', wrongPayerNotify.errcode !== 0);
@@ -645,9 +649,9 @@ async function main() {
   const wdInfo2 = (await call('withdrawal', { action: 'info' })).result;
   step('A 剩余可提现=4025', wdInfo2.available === 4025 && wdInfo2.pendingAmount === 1000, '实际=' + wdInfo2.available);
 
-  // 验证申请边界: 申请 100 元以下应失败
-  const small = (await call('withdrawal', { action: 'apply', amount: 500, name: 'A', account: 'x' })).result;
-  step('10元起提拦截', !small.success && small.error.indexOf('10') >= 0);
+  // 验证申请边界: 微信商家转账最低 0.3 元
+  const small = (await call('withdrawal', { action: 'apply', amount: 20, name: 'A', account: 'x' })).result;
+  step('低于0.3元起提拦截', !small.success && small.error.indexOf('0.3') >= 0);
 
   // 验证申请超额应失败
   setOpenId('mock-agent-A');
@@ -670,11 +674,21 @@ async function main() {
   step('拆分出 paid 佣金 1000', paidComm && paidComm.amount === 1000, '实际=' + (paidComm && paidComm.amount));
   step('paid 佣金 status=paid', paidComm && paidComm.status === 'paid', '实际=' + (paidComm && paidComm.status));
 
-  // 验证提现记录变 approved
+  // 审核后已向微信发起转账，并保存 C 端拉起确认页所需的 package_info。
   const wdDoc = db._store.withdrawals.find(w => w._id === wdId);
-  step('提现 status=approved', wdDoc.status === 'approved', '实际=' + wdDoc.status);
+  step('提现 status=transferring', wdDoc.status === 'transferring', '实际=' + wdDoc.status);
+  step('提现保存微信收款确认凭证', !!wdDoc.packageInfo && wdDoc.transferState === 'WAIT_USER_CONFIRM');
+
+  setOpenId('mock-customer-B');
+  const forbiddenReceive = (await call('admin', { action: 'getOwnWithdrawalTransfer', withdrawalId: wdId })).result;
+  step('非本人不能领取提现转账', !forbiddenReceive.success && forbiddenReceive.error.indexOf('无权') >= 0);
+  setOpenId('mock-agent-A');
+  const ownReceive = (await call('admin', { action: 'getOwnWithdrawalTransfer', withdrawalId: wdId })).result;
+  step('分销员本人取得微信确认参数', ownReceive.success && ownReceive.ready &&
+    ownReceive.mchId && ownReceive.appId && ownReceive.packageInfo === wdDoc.packageInfo);
 
   // 重复审批应返回同一结果，且不能重复写资金流水。
+  setOpenId('mock-owner');
   const dup = (await call('admin', { action: 'processWithdrawal', withdrawalId: wdId, approve: true })).result;
   step('重复审批幂等', dup.success && dup.alreadyProcessed &&
     db._store.cashflow_entries.filter(entry => entry.idempotencyKey === 'commission_payout:' + wdId).length === 1);

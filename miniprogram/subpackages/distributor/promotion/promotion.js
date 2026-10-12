@@ -62,6 +62,6 @@ Page({
 
   onShareAppMessage() {
     const asset = this.data.asset;
-    return asset ? { title: '橘与杏自然生活好物', path: asset.sharePath, imageUrl: '/images/share-banner.png' } : {};
+    return asset ? { title: '林元元自然生活好物', path: asset.sharePath, imageUrl: '/images/share-banner.png' } : {};
   }
 });

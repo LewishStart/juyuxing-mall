@@ -1,9 +1,9 @@
 ---
 name: juyuxing-mall-debug
-description: Debug build, UI, simulator, or cloud-call symptoms in the Juyuxing Mall WeChat Mini Program. Use when a user asks to debug, diagnose, investigate, explain, or explicitly repair a symptom in this repository.
+description: Debug build, UI, simulator, or cloud-call symptoms in the Lin Yuanyuan Mall WeChat Mini Program. Use when a user asks to debug, diagnose, investigate, explain, or explicitly repair a symptom in this repository.
 ---
 
-# Juyuxing Mall Debug
+# Lin Yuanyuan Mall Debug
 
 Read `../juyuxing-mall-project.md` before acting. Apply this skill only when its repository markers match the current workspace. Reuse an active WeChat DevTools project; when readiness evidence is absent, direct the user to `$juyuxing-mall-bootstrap` first.
 

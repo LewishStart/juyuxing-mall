@@ -131,7 +131,7 @@ exports.main = async (event, context) => {
       try {
         // 调用微信云支付统一下单
         const payRes = await cloud.cloudPay.unifiedOrder({
-          body: `橘与杏 - ${order.items.map(i => i.name).join(', ')}`,
+          body: `林元元 - ${order.items.map(i => i.name).join(', ')}`,
           outTradeNo: order.orderNo,
           spbillCreateIp: '127.0.0.1',
           subMchId: subMchId,

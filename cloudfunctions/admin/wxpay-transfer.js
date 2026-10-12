@@ -121,13 +121,22 @@ function isBillNotExistError(err) {
  *   outBillNo 传入则复用（重试场景）；不传则新生成
  * @returns {Promise<{outBillNo, transferBillNo, state, packageInfo, raw}>}
  *   state: ACCEPTED / PROCESSING / WAIT_USER_CONFIRM / TRANSFERING / SUCCESS / FAIL / CANCELING / CANCELLED
- *   WAIT_USER_CONFIRM 时分销员会收到微信「服务通知」，点击确认后入账零钱（24小时不确认单据关闭）
+ *   WAIT_USER_CONFIRM 时需由小程序调用 wx.requestMerchantTransfer 拉起确认页（24小时不确认单据关闭）
  */
 async function initiateTransfer(p) {
   const amountFen = Math.round(Number(p.amountFen) || 0);
   if (amountFen <= 0) throw new Error('转账金额无效');
   if (!p.openid) throw new Error('收款人 openid 缺失');
   const outBillNo = p.outBillNo || genOutBillNo();
+  if (process.env.ALLOW_MOCK_PAY === 'true') {
+    return {
+      outBillNo,
+      transferBillNo: 'mock_transfer_' + outBillNo,
+      state: 'WAIT_USER_CONFIRM',
+      packageInfo: 'mock_package_' + outBillNo,
+      raw: {}
+    };
+  }
   const remark = String(p.remark || '分销佣金提现').slice(0, 32);
   const body = {
     appid: APP_ID,
@@ -162,6 +171,9 @@ async function initiateTransfer(p) {
  * @rejects Error{httpCode, code, message} 单不存在时可用 isBillNotExistError 判定
  */
 async function queryBill(outBillNo) {
+  if (process.env.ALLOW_MOCK_PAY === 'true') {
+    return { state: 'WAIT_USER_CONFIRM', failReason: '', updateTime: '', raw: {} };
+  }
   const resp = await v3Request('GET',
     '/v3/fund-app/mch-transfer/transfer-bills/out-bill-no/' + encodeURIComponent(outBillNo),
     null);
@@ -173,4 +185,8 @@ async function queryBill(outBillNo) {
   };
 }
 
-module.exports = { initiateTransfer, queryBill, genOutBillNo, isBillNotExistError };
+function getTransferClientConfig() {
+  return { mchId: MCH_ID, appId: APP_ID };
+}
+
+module.exports = { initiateTransfer, queryBill, genOutBillNo, isBillNotExistError, getTransferClientConfig };

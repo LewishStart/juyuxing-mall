@@ -1,13 +1,13 @@
 #!/bin/bash
 set -u
 
-# 橘与杏商城 — 部署前本地依赖检查
+# 林元元商城 — 部署前本地依赖检查
 # 默认会为缺少依赖的云函数安装生产依赖；传入 --check 只检查、不下载。
 
 MODE="install"
 if [ "${1:-}" = "--check" ]; then MODE="check"; fi
 
-echo "橘与杏商城 · 部署前检查"
+echo "林元元商城 · 部署前检查"
 
 APPID=$(node -p "require('./project.config.json').appid || ''")
 CLOUD_ENV=$(node -p "require('./cloudbaserc.json').envId || ''")

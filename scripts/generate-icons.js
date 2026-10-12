@@ -1,10 +1,10 @@
-// 橘与杏 · 高级图标生成器
+// 林元元 · 高级图标生成器
 // 风格：Lucide/Feather 线条风，1.5px 描边，圆角端点，96x96 高清 PNG
 const sharp = require('sharp');
 const fs = require('fs');
 const path = require('path');
 
-const ICONS_DIR = '/Users/orange/Documents/橘与杏商城/miniprogram/images/icons';
+const ICONS_DIR = path.resolve(__dirname, '../miniprogram/images/icons');
 
 // 色彩规范
 const C_TAB = '#8B7E72';     // tab bar 未选中

@@ -1,6 +1,6 @@
-# Juyuxing Mall Project Reference
+# Lin Yuanyuan Mall Project Reference
 
-Use this reference only from the Juyuxing Mall project-local skills.
+Use this reference only from the Lin Yuanyuan Mall project-local skills.
 
 ## Identity
 

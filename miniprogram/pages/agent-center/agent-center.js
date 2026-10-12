@@ -66,7 +66,7 @@ Page({
   onShareAppMessage() {
     const openId = wx.getStorageSync('openId');
     return {
-      title: '橘与杏中医生活 - 自然疗愈好物',
+      title: '林元元中医生活 - 自然疗愈好物',
       path: `/pages/index/index?ref=${openId || ''}`,
       imageUrl: '/images/share-banner.png'
     };

@@ -2,7 +2,7 @@
   <view class="privacy-card">
     <view class="privacy-title">隐私授权</view>
     <view class="privacy-content">
-      感谢使用橘与杏中医生活。我们高度重视您的个人信息保护，使用前请阅读并同意
+      感谢使用林元元中医生活。我们高度重视您的个人信息保护，使用前请阅读并同意
       <text class="privacy-link" bindtap="openContract">《隐私保护指引》</text>，
       我们将依据指引收集您的微信昵称、头像用于完善个人资料。
     </view>

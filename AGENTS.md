@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This repository contains the Orange & Apricot WeChat Mini Program and its CloudBase backend. `miniprogram/` is the client: each feature page lives in `pages/<feature>/` with matching `.js`, `.json`, `.wxml`, and `.wxss` files. Shared client code belongs in `miniprogram/utils/`, reusable components in `miniprogram/components/`, styles in `miniprogram/style/`, and images in `miniprogram/images/`.
+This repository contains the Lin Yuanyuan WeChat Mini Program and its CloudBase backend. `miniprogram/` is the client: each feature page lives in `pages/<feature>/` with matching `.js`, `.json`, `.wxml`, and `.wxss` files. Shared client code belongs in `miniprogram/utils/`, reusable components in `miniprogram/components/`, styles in `miniprogram/style/`, and images in `miniprogram/images/`.
 
 `cloudfunctions/<function>/index.js` contains one deployable CloudBase function, with its own `package.json`. Configuration is in `project.config.json`, `cloudbaserc.json`, and `database-indexes.json`. `admin-web/` is an admin prototype; `scripts/` holds verification and setup tools.
 

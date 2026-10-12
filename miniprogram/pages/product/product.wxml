@@ -51,7 +51,7 @@
 
     <!-- 品牌卡片 -->
     <view class="brand-card card">
-      <text class="brand-card-title">橘与杏</text>
+      <text class="brand-card-title">林元元</text>
       <text class="brand-card-text">源于草本，温润日常。每一份产品都来自对自然的敬畏与热爱。</text>
     </view>
   </block>

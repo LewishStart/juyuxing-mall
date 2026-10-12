@@ -161,7 +161,7 @@
       <scroll-view scroll-y class="modal-body">
         <view class="form-group">
           <text class="form-label required">商品名称</text>
-          <input class="form-input" placeholder="例如：橘与杏紫草膏" value="{{productForm.name}}" data-field="name" bindinput="onProductFormInput" maxlength="60" />
+          <input class="form-input" placeholder="例如：林元元紫草膏" value="{{productForm.name}}" data-field="name" bindinput="onProductFormInput" maxlength="60" />
         </view>
 
         <view class="form-group">

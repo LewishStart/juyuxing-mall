@@ -2,7 +2,7 @@
   <!-- 顶部渐变区：品牌 + 搜索 + 双入口 -->
   <view class="home-top">
     <view class="home-brand-row">
-      <text class="home-brand-name">橘与杏</text>
+      <text class="home-brand-name">林元元</text>
       <text class="home-brand-tag">中医生活 · 自然疗愈</text>
     </view>
     <view class="search-bar search-bar-icon-only" bindtap="goSearch" hover-class="search-bar-hover">
@@ -92,7 +92,7 @@
     <view class="story-content card">
       <view class="story-quote-mark">"</view>
       <text class="story-text">
-        「橘与杏」取自中医"杏林、橘井"的雅称。深耕中医临床多年的医学博士，以纯天然草本配方，做全家安心的肌肤日常防护。
+        「林元元」专注中医草本日常养护。深耕中医临床多年的医学博士，以纯天然草本配方，做全家安心的肌肤日常防护。
       </text>
       <text class="story-text">
         拒绝激素、拒绝刺激性化学药品添加——温和有度、起效有据、安全终身。

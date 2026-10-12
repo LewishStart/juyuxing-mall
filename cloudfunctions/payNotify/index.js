@@ -89,18 +89,10 @@ exports.main = async (event) => {
     console.log('[payNotify] 支付副作用已确认:', result.orderId);
     return { errcode: 0, errmsg: 'success' };
   } catch (err) {
-    // 付款身份与订单用户不一致：金额与订单号已强校验，身份不一致降级为告警留痕、不阻断确认，
-    // 避免因平台侧/小程序侧 openid 口径差异导致回调永远失败、订单卡在待支付。
+    // 只有 sub_openid 与订单 userId 同源；它一旦明确不一致就必须拒绝。
+    // 回调未携带 sub_openid 时 payerOpenId 为空，事务层不会做跨口径误判。
     if (err && err.message === '付款身份与订单用户不一致') {
       await recordEvent('payer_mismatch', { outTradeNo, payerOpenId, openid: event.openid || '' });
-      try {
-        const result = await confirmPayment({ outTradeNo, transactionId, totalFee, source: 'payNotify' });
-        await recordEvent('processed_after_mismatch', { outTradeNo, orderId: result.orderId });
-        console.log('[payNotify] 身份口径差异已降级处理:', result.orderId);
-        return { errcode: 0, errmsg: 'success' };
-      } catch (retryErr) {
-        err = retryErr;
-      }
     }
     await recordEvent('error', { outTradeNo, error: String(err && (err.message || err)) });
     console.error('[payNotify] 处理失败:', err);

@@ -175,7 +175,7 @@ Page({
   onShareAppMessage() {
     const p = this.data.product || {};
     return {
-      title: `${p.name || '好物'} - ${p.subtitle || '橘与杏中医生活'}`,
+      title: `${p.name || '好物'} - ${p.subtitle || '林元元中医生活'}`,
       path: `/pages/product/product?id=${p._id || ''}`,
       imageUrl: (p.images && p.images[0]) || '/images/share-banner.png'
     };

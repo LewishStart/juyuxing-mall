@@ -15,7 +15,7 @@ const STATUS_TEXT = {
 };
 
 Page({
-  data: { available: '0.00', ledgerBalance: '0.00', pendingAmount: '0.00', frozenAmount: '0.00', frozenCount: 0, records: [], amount: '', name: '', account: '', requestId: '', submitting: false },
+  data: { available: '0.00', ledgerBalance: '0.00', pendingAmount: '0.00', frozenAmount: '0.00', frozenCount: 0, records: [], amount: '', name: '', account: '', requestId: '', submitting: false, receivingId: '' },
   onShow() { this.load(); },
   async load() {
     const [info, history] = await Promise.all([
@@ -53,5 +53,47 @@ Page({
     this.setData({ submitting: false });
     if (result && result.success) { toast(result.duplicate ? '申请已提交，请勿重复操作' : '提现申请已提交', 'success'); this.setData({ amount: '', requestId: '' }); this.load(); }
     else toast((result && result.error) || '提交失败');
+  },
+  async receiveTransfer(e) {
+    if (this.data.receivingId) return;
+    const withdrawalId = String(e.currentTarget.dataset.id || '');
+    if (!withdrawalId) return;
+    this.setData({ receivingId: withdrawalId });
+    const transfer = await API.getOwnWithdrawalTransfer(withdrawalId, { silent: true });
+    if (!transfer || !transfer.success) {
+      this.setData({ receivingId: '' });
+      toast((transfer && transfer.error) || '暂时无法领取转账');
+      await this.load();
+      return;
+    }
+    if (!transfer.ready) {
+      this.setData({ receivingId: '' });
+      toast(transfer.message || '微信正在处理转账，请稍后再试');
+      await this.load();
+      return;
+    }
+    if (!wx.canIUse || !wx.canIUse('requestMerchantTransfer') || typeof wx.requestMerchantTransfer !== 'function') {
+      this.setData({ receivingId: '' });
+      wx.showModal({ content: '当前微信版本不支持确认收款，请升级微信后重试。', showCancel: false });
+      return;
+    }
+    wx.requestMerchantTransfer({
+      mchId: transfer.mchId,
+      appId: transfer.appId,
+      package: transfer.packageInfo,
+      success: async () => {
+        this.setData({ receivingId: '' });
+        toast('已打开微信收款确认页', 'success');
+        await API.getOwnWithdrawalTransfer(withdrawalId, { silent: true });
+        await this.load();
+      },
+      fail: async res => {
+        this.setData({ receivingId: '' });
+        const message = String((res && (res.errMsg || res.err_msg)) || '');
+        if (message.indexOf('cancel') >= 0) toast('你已取消确认，可稍后重新领取');
+        else toast('收款确认页打开失败，请稍后重试');
+        await this.load();
+      }
+    });
   }
 });

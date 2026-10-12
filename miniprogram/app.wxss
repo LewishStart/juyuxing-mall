@@ -1,4 +1,4 @@
-/* 橘与杏中医生活 - 全局样式 */
+/* 林元元中医生活 - 全局样式 */
 @import './style/tokens.wxss';
 
 page {

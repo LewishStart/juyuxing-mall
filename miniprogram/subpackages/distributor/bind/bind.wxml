@@ -1,5 +1,5 @@
 <view class="distributor-page bind-page">
-  <view class="brand-mark">橘与杏</view>
+  <view class="brand-mark">林元元</view>
   <view class="bind-card">
     <text class="bind-title">分销员专属入口</text>
     <text class="bind-desc" wx:if="{{!activated}}">此入口仅面向受邀分销员。激活后可生成专属推广素材、查看佣金并申请提现。</text>

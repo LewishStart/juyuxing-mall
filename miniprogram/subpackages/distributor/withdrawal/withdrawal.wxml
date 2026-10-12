@@ -30,7 +30,10 @@
   <view class="card"><text class="title">提现记录</text>
     <view class="record" wx:for="{{records}}" wx:key="_id">
       <view class="record-left"><text>¥{{item.amount / 100}}</text><text class="record-status">{{item.statusText}}</text></view>
-      <text class="record-hint" wx:if="{{item.status === 'transferring'}}">请在微信「服务通知」中确认收款</text>
+      <view class="record-receive" wx:if="{{item.status === 'transferring'}}">
+        <text class="record-hint">微信转账已发起，请确认领取</text>
+        <button class="receive-btn" data-id="{{item._id}}" bindtap="receiveTransfer" loading="{{receivingId === item._id}}" disabled="{{receivingId !== ''}}">确认收款</button>
+      </view>
     </view>
     <text class="empty" wx:if="{{records.length === 0}}">暂无记录</text>
   </view>

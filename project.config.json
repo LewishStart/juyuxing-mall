@@ -1,5 +1,5 @@
 {
-  "description": "橘与杏中医生活 - 品牌商城小程序",
+  "description": "林元元中医生活 - 品牌商城小程序",
   "packOptions": {
     "ignore": [],
     "include": []
@@ -14,7 +14,7 @@
   "compileType": "miniprogram",
   "libVersion": "3.7.9",
   "appid": "wx6e685f787f1cd099",
-  "projectname": "橘与杏中医生活",
+  "projectname": "林元元中医生活",
   "miniprogramRoot": "miniprogram/",
   "cloudfunctionRoot": "cloudfunctions/",
   "condition": {},

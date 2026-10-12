@@ -1,9 +1,9 @@
 ---
 name: juyuxing-mall-bootstrap
-description: Bootstrap the Juyuxing Mall WeChat Mini Program for safe local debugging. Use when a user asks to bootstrap, prepare, open, compile, or verify local readiness for this repository's Mini Program.
+description: Bootstrap the Lin Yuanyuan Mall WeChat Mini Program for safe local debugging. Use when a user asks to bootstrap, prepare, open, compile, or verify local readiness for this repository's Mini Program.
 ---
 
-# Juyuxing Mall Bootstrap
+# Lin Yuanyuan Mall Bootstrap
 
 Read `../juyuxing-mall-project.md` before acting. Apply this skill only when its repository markers match the current workspace.
 

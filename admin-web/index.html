@@ -10,7 +10,7 @@
       );
     }
   </script>
-  <title>橘与杏 管理后台</title>
+  <title>林元元 管理后台</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="style.css?v=abc-v16">
   <script defer src="https://static.cloudbase.net/cloudbase-js-sdk/2.27.1/cloudbase.full.js"></script>
@@ -18,7 +18,7 @@
 </head>
 <body>
 <div id="loading-shell" class="loading-shell">
-  <div class="loading-mark">橘与杏</div>
+  <div class="loading-mark">林元元</div>
   <div class="loading-text">管理后台正在加载...</div>
 </div>
 <div id="app" v-cloak>
@@ -26,7 +26,7 @@
   <!-- ===== 登录页 ===== -->
   <div v-if="!isLoggedIn" class="login-page">
     <div class="login-card">
-      <div class="login-logo">橘与杏</div>
+      <div class="login-logo">林元元</div>
       <div class="login-subtitle">中医生活 · 管理后台</div>
       <div class="qr-login-panel">
         <div class="qr-frame" :class="{ 'is-muted': qrLogin.status !== 'pending' }">
@@ -60,7 +60,7 @@
 
     <!-- 侧边栏 -->
     <aside class="sidebar">
-      <div class="sidebar-logo">橘与杏</div>
+      <div class="sidebar-logo">林元元</div>
       <div class="sidebar-account">{{ currentAccount && currentAccount.displayName }} · {{ currentAccount && currentAccount.role }}</div>
       <nav class="sidebar-nav">
         <a
@@ -852,6 +852,7 @@
 
 </div>
 
-  <script defer src="app.js?v=abc-v16"></script>
+  <script defer src="brand.js?v=linyuanyuan-v1"></script>
+  <script defer src="app.js?v=abc-v17-linyuanyuan"></script>
 </body>
 </html>

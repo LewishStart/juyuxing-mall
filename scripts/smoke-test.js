@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // =============================================================
-// 橘与杏中医生活 — 业务规则 smoke test
+// 林元元中医生活 — 业务规则 smoke test
 // 运行: node scripts/smoke-test.js
 //
 // 不依赖云开发环境，本地静态检查 + 关键业务规则验证。
@@ -464,6 +464,14 @@ if (withdrawalSrc.includes('withTransaction') && withdrawalSrc.includes('withdra
 } else {
   fail('提现事务保护', '申请或审核缺少事务冲突字段、幂等键或自动转账标识');
 }
+const distributorWithdrawalSrc = read('miniprogram/subpackages/distributor/withdrawal/withdrawal.js');
+if (adminSrc.includes('getOwnWithdrawalTransfer') && adminSrc.includes('packageInfo: transfer.packageInfo') &&
+    apiSrc.includes('getOwnWithdrawalTransfer') &&
+    distributorWithdrawalSrc.includes('wx.requestMerchantTransfer')) {
+  ok('提现转账保存确认凭证并由分销员本人拉起微信收款确认页');
+} else {
+  fail('提现收款确认闭环', '应保存 package_info、校验提现归属并调用 wx.requestMerchantTransfer');
+}
 if (adminSrc.includes('createOutRefundNo') && adminSrc.includes("refundChannel: 'mock'") &&
     adminSrc.includes('订单缺少微信支付交易号') && orderSrc.includes('idempotencyKey: `refund_request:')) {
   ok('退款区分模拟/真实支付并使用固定退款单号');
@@ -540,7 +548,7 @@ if (adminQrAuthSrc.includes("case 'createQrLogin'") &&
 if (!userWxml.includes('/pages/agent-') && !userWxml.includes('/pages/admin/admin') &&
     !(appJson.pages || []).some(page => /agent|withdrawal|admin|shop-editor|referral/.test(page)) &&
     (appJson.subPackages || []).some(pkg => pkg.root === 'subpackages/distributor') &&
-    !customerHomeWxml.includes('成为橘与杏代理') &&
+    !customerHomeWxml.includes('成为林元元代理') &&
     !customerHomeWxml.includes('/pages/agent-join/agent-join')) {
   ok('A 端已移除分销/后台入口，C 端使用独立分包');
 } else fail('A/C 端隔离', 'A 端仍暴露分销后台入口或 C 端未分包');

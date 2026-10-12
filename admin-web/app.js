@@ -1,5 +1,5 @@
 /**
- * 橘与杏 中医生活 — Web 管理后台
+ * 林元元 中医生活 — Web 管理后台
  * Vue 3 + 微信云开发 JS SDK
  */
 
@@ -30,7 +30,9 @@ async function callAdmin(action, data = {}) {
       name: 'admin',
       data: { action, adminToken: token, ...data }
     });
-    return res.result;
+    const catalogActions = ['productList', 'orderList', 'orderDetail', 'refundList'];
+    return window.MallBrand && catalogActions.includes(action)
+      ? window.MallBrand.normalizeBrandDisplay(res.result) : res.result;
   } catch (e) {
     console.error(`[callAdmin] ${action} failed:`, e);
     const message = String((e && e.message) || '');

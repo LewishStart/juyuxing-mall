@@ -1,7 +1,12 @@
 // 云函数调用封装（统一走 utils/request.js）
 const request = require('./request');
+const { normalizeBrandDisplay } = require('./brand');
 
-const call = (name, data, options) => request.call(name, data, options);
+const catalogFunctions = ['product', 'banner', 'cart', 'order', 'category', 'promotion'];
+const call = async (name, data, options) => {
+  const result = await request.call(name, data, options);
+  return catalogFunctions.includes(name) ? normalizeBrandDisplay(result) : result;
+};
 
 const API = {
   // 用户
@@ -61,6 +66,7 @@ const API = {
   getWithdrawalInfo: (options) => call('withdrawal', { action: 'info' }, options),
   applyWithdrawal: (data, options) => call('withdrawal', Object.assign({ action: 'apply' }, data || {}), options),
   getWithdrawalList: (params, options) => call('withdrawal', Object.assign({ action: 'list' }, params || {}), options),
+  getOwnWithdrawalTransfer: (withdrawalId, options) => call('admin', { action: 'getOwnWithdrawalTransfer', withdrawalId }, options),
 
   // 退款（管理后台）
   getRefundList: (options) => call('admin', { action: 'refundList' }, options),

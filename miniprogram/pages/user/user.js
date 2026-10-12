@@ -171,7 +171,7 @@ Page({
 
   onShareAppMessage() {
     return {
-      title: '橘与杏中医生活 - 我的',
+      title: '林元元中医生活 - 我的',
       path: '/pages/index/index'
     };
   }

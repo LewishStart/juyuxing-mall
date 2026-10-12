@@ -4,7 +4,7 @@ const cloud = require('wx-server-sdk');
 const { queryRefundStatus } = require('./refund-query');
 const { applyRefundEffects } = require('./refund-effects');
 const { loadPayApiConfig, directOrderQuery, directRefund } = require('./wxpay-direct');
-const { initiateTransfer, queryBill, isBillNotExistError, genOutBillNo } = require('./wxpay-transfer');
+const { initiateTransfer, queryBill, isBillNotExistError, genOutBillNo, getTransferClientConfig } = require('./wxpay-transfer');
 const crypto = require('crypto');
 const https = require('https');
 const ENV_ID = 'cloud1-d4gx1jxk675274501';
@@ -395,6 +395,57 @@ exports.main = async (event, context) => {
   const { OPENID } = cloud.getWXContext();
   const action = event.action || 'dashboard';
   const adminToken = event.adminToken || '';
+
+  // 分销员本人领取已审核的微信转账：只返回本人单据的临时确认参数。
+  // 此入口必须在后台账号鉴权之前，否则 C 端无法拉起微信官方收款确认页。
+  if (action === 'getOwnWithdrawalTransfer') {
+    const withdrawalId = String(event.withdrawalId || '').trim();
+    if (!OPENID) return { success: false, error: '缺少可信微信身份，请从小程序重新登录' };
+    if (!withdrawalId) return { success: false, error: '提现记录ID不能为空' };
+    const wdRes = await db.collection('withdrawals').doc(withdrawalId).get().catch(() => null);
+    const wd = wdRes && wdRes.data;
+    if (!wd || wd.agentId !== OPENID) return { success: false, error: '提现记录不存在或无权访问' };
+    if (!wd.outBatchNo) return { success: false, error: '该笔提现尚未发起微信转账' };
+
+    try {
+      const bill = await queryBill(wd.outBatchNo);
+      const state = bill.state;
+      const packageInfo = wd.packageInfo || (bill.raw && bill.raw.package_info) || '';
+      if (state === 'SUCCESS') {
+        await db.collection('withdrawals').doc(withdrawalId).update({ data: {
+          status: 'success', transferState: state, finishTime: db.serverDate(), lastPayError: ''
+        } });
+        return { success: true, ready: false, state, withdrawalStatus: 'success', message: '转账已到账' };
+      }
+      if (state === 'FAIL' || state === 'CANCELLED') {
+        await db.collection('withdrawals').doc(withdrawalId).update({ data: {
+          status: 'pending_pay', transferState: state,
+          lastOutBatchNo: wd.outBatchNo, outBatchNo: '', transferBillNo: '', packageInfo: '',
+          lastPayError: (state === 'CANCELLED' ? '转账单已关闭' : '转账失败') +
+            (bill.failReason ? '：' + bill.failReason : '')
+        } });
+        return { success: false, code: 'TRANSFER_CLOSED', error: '转账单已失效，请联系财务重新发起' };
+      }
+      await db.collection('withdrawals').doc(withdrawalId).update({ data: {
+        status: 'transferring', transferState: state, packageInfo, lastPayError: ''
+      } });
+      if (state !== 'WAIT_USER_CONFIRM' && state !== 'TRANSFERING') {
+        return { success: true, ready: false, state, message: '微信正在处理转账，请稍后再试' };
+      }
+      if (!packageInfo) {
+        return { success: false, code: 'TRANSFER_PACKAGE_MISSING', error: '该笔旧转账缺少收款确认凭证，请联系财务重新发起' };
+      }
+      return {
+        success: true,
+        ready: true,
+        state,
+        packageInfo,
+        ...getTransferClientConfig()
+      };
+    } catch (err) {
+      return { success: false, error: '查询微信转账状态失败：' + ((err && err.message) || '请稍后重试') };
+    }
+  }
 
   // ===== 登录接口：不需要管理员权限验证 =====
   if (action === 'login') {
@@ -905,7 +956,7 @@ exports.main = async (event, context) => {
         const wd = wdRes.data;
         if (!wd) return { success: false, error: '提现记录不存在' };
         if (wd.status === 'transferring') {
-          return { success: false, error: '该笔转账处理中（待分销员确认收款），请点「查询到账状态」跟进' };
+          return { success: true, alreadyProcessed: true, message: '该笔转账已发起，等待分销员在 C 端确认收款' };
         }
         if (wd.status === 'success' || wd.status === 'approved') {
           return { success: true, alreadyProcessed: true, message: '该笔提现已打款' };
@@ -1008,20 +1059,20 @@ exports.main = async (event, context) => {
             const qState = queried.state;
             if (qState === 'SUCCESS') {
               await db.collection('withdrawals').doc(withdrawalId).update({ data: {
-                status: 'success', finishTime: db.serverDate(), lastPayError: ''
+                status: 'success', transferState: qState, finishTime: db.serverDate(), lastPayError: ''
               } });
               return { success: true, message: '原转账单已完成，分销员已收款' };
             }
             if (qState === 'FAIL' || qState === 'CANCELLED') {
               // 原单终态失败：换单号重试（旧单号存档）
               await db.collection('withdrawals').doc(withdrawalId).update({ data: {
-                lastOutBatchNo: billNo, outBatchNo: ''
+                transferState: qState, lastOutBatchNo: billNo, outBatchNo: '', packageInfo: ''
               } });
               billNo = '';
             } else {
               // 非终态（ACCEPTED/PROCESSING/WAIT_USER_CONFIRM/TRANSFERING/CANCELING）：单仍在微信侧流转
               await db.collection('withdrawals').doc(withdrawalId).update({ data: {
-                status: 'transferring', lastPayError: ''
+                status: 'transferring', transferState: qState, lastPayError: ''
               } });
               return {
                 success: true,
@@ -1050,6 +1101,8 @@ exports.main = async (event, context) => {
           const st = transfer.state;
           const updateData = {
             transferBillNo: transfer.transferBillNo || '',
+            packageInfo: transfer.packageInfo || '',
+            transferState: st,
             transferTime: db.serverDate(),
             transferAttempts: _.inc(1),
             lastPayError: '',
@@ -1063,7 +1116,7 @@ exports.main = async (event, context) => {
             state: st,
             message: st === 'SUCCESS'
               ? '转账成功，佣金已转入分销员微信零钱'
-              : '已发起微信转账，分销员将在微信「服务通知」中收到确认收款提醒（24小时内有效）'
+              : '已发起微信转账，请分销员进入 C 端「提现管理」确认收款（24小时内有效）'
           };
         } catch (err) {
           const errMsg = String((err && err.code ? err.code + ': ' : '') + (err && err.message || err)).slice(0, 300);
@@ -1097,26 +1150,29 @@ exports.main = async (event, context) => {
         const st = bill.state;
         if (st === 'SUCCESS') {
           await db.collection('withdrawals').doc(withdrawalId).update({ data: {
-            status: 'success', finishTime: db.serverDate(), lastPayError: ''
+            status: 'success', transferState: st, finishTime: db.serverDate(), lastPayError: ''
           } });
           return { success: true, batchStatus: st, withdrawalStatus: 'success', message: '转账已完成，分销员已收款' };
         }
         if (st === 'FAIL' || st === 'CANCELLED') {
           await db.collection('withdrawals').doc(withdrawalId).update({ data: {
             status: 'pending_pay',
+            transferState: st,
             lastOutBatchNo: wd.outBatchNo,
             outBatchNo: '',
             transferBillNo: '',
+            packageInfo: '',
             lastPayError: (st === 'CANCELLED'
               ? '转账单已关闭（分销员超时未确认收款）'
               : '转账失败' + (bill.failReason ? '：' + bill.failReason : '')) + '，可重新发起'
           } });
           return { success: true, batchStatus: st, withdrawalStatus: 'pending_pay', message: '转账单已' + (st === 'CANCELLED' ? '关闭' : '失败') + '，可点击「重试转账」重新发起' };
         }
-        const statusText = st === 'WAIT_USER_CONFIRM' ? '待分销员确认收款（请在微信「服务通知」中点击确认）'
+        const statusText = st === 'WAIT_USER_CONFIRM' ? '待分销员确认收款（请进入 C 端「提现管理」点击确认）'
           : st === 'ACCEPTED' ? '微信已受理'
           : (st === 'PROCESSING' || st === 'TRANSFERING') ? '转账处理中'
           : st === 'CANCELING' ? '转账单撤销中' : st;
+        await db.collection('withdrawals').doc(withdrawalId).update({ data: { transferState: st } });
         return { success: true, batchStatus: st, withdrawalStatus: wd.status, message: '当前状态：' + statusText };
       } catch (err) {
         return { success: false, error: (err && err.message) || '查询转账状态失败' };

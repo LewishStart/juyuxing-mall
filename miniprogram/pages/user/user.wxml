@@ -13,7 +13,7 @@
         {{userInfo.nickName || (isLoggedIn ? '微信用户' : '点击登录')}}
       </text>
       <text class="user-desc" wx:if="{{!isLoggedIn}}">登录后解锁完整功能</text>
-      <text class="user-desc" wx:else>橘与杏生活家</text>
+      <text class="user-desc" wx:else>林元元生活家</text>
     </view>
   </view>
 
@@ -76,7 +76,7 @@
     </navigator>
     <navigator url="/pages/about/about" class="menu-item">
       <image class="menu-icon-img" src="/images/icons/book.png" mode="aspectFit"></image>
-      <text class="menu-text">关于橘与杏</text>
+      <text class="menu-text">关于林元元</text>
       <text class="menu-arrow">›</text>
     </navigator>
   </view>

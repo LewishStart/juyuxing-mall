@@ -1,5 +1,5 @@
 <view class="admin-auth-page">
-  <view class="brand-mark">橘与杏</view>
+  <view class="brand-mark">林元元</view>
 
   <view class="auth-card">
     <view wx:if="{{loading}}" class="state-block">

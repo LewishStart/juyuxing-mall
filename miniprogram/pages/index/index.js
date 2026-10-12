@@ -1,5 +1,6 @@
 const API = require('../../utils/api');
 const { toast } = require('../../utils/util');
+const { normalizeBrandDisplay } = require('../../utils/brand');
 
 const BANNER_CACHE_KEY = 'homeBannerCache';
 const BANNER_CACHE_TTL = 5 * 60 * 1000;
@@ -25,7 +26,7 @@ function readBannerCache() {
     const cache = wx.getStorageSync(BANNER_CACHE_KEY);
     if (!cache || !Number.isFinite(cache.timestamp) || !Array.isArray(cache.banners) ||
       !cache.banners.every(isValidBanner)) return null;
-    return cache;
+    return normalizeBrandDisplay(cache);
   } catch (err) {
     return null;
   }
@@ -363,7 +364,7 @@ Page({
 
   onShareAppMessage() {
     return {
-      title: '橘与杏中医生活 - 自然疗愈好物',
+      title: '林元元中医生活 - 自然疗愈好物',
       path: '/pages/index/index',
       imageUrl: '/images/share-banner.png'
     };
