@@ -109,10 +109,9 @@ function v3Request(method, urlPath, bodyObj) {
  */
 function isBillNotExistError(err) {
   if (!err) return false;
-  if (err.httpCode === 404) return true;
   const c = String(err.code || '').toUpperCase();
   if (c === 'NOT_FOUND' || c === 'RESOURCE_NOT_EXISTS' || c === 'RESOURCE_NOT_EXIST') return true;
-  return /not exist|不存在/i.test(String(err.message || ''));
+  return false;
 }
 
 /**

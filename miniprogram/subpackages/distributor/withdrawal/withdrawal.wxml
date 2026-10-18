@@ -1,6 +1,6 @@
 <view class="page">
   <view class="balance-card">
-    <text>可提现金额</text><text class="balance">¥{{available}}</text><text class="sub">审核中 ¥{{pendingAmount}} · 账面余额 ¥{{ledgerBalance}}</text>
+    <text>可提现金额</text><text class="balance">¥{{available}}</text><text class="sub">提现处理中 ¥{{pendingAmount}} · 账面余额 ¥{{ledgerBalance}}</text>
     <view class="frozen-tip" wx:if="{{frozenCount > 0}}">冻结中 ¥{{frozenAmount}}（{{frozenCount}}笔）— 买家确认收货后自动转为可提现</view>
   </view>
   <view class="card"><text class="title">申请提现</text>

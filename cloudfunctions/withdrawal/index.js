@@ -21,7 +21,7 @@ async function getBalance(database, agentId) {
   // 注意：此函数会被传入事务对象调用。云开发事务会话不支持并发请求（Promise.all 会报
   // TransactionBusy -501001），必须逐个 await 顺序执行查询。
   const commissionRes = await database.collection('commissions')
-    .where({ agentId, status: 'settled' })
+    .where({ agentId, status: _.in(['settled', 'withdrawing']) })
     .limit(1000)
     .get();
   const pendingRes = await database.collection('withdrawals')
@@ -34,14 +34,16 @@ async function getBalance(database, agentId) {
     .get();
   const ledgerBalance = (commissionRes.data || [])
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const held = (commissionRes.data || []).filter(item => item.status === 'withdrawing');
+  const heldAmount = held.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const pendingAmount = (pendingRes.data || [])
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0) + heldAmount;
   const frozenAmount = (frozenRes.data || [])
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   return {
     ledgerBalance,
     pendingAmount,
-    pendingCount: (pendingRes.data || []).length,
+    pendingCount: (pendingRes.data || []).length + new Set(held.map(item => item.paidByWithdrawal)).size,
     frozenAmount,
     frozenCount: (frozenRes.data || []).length,
     available: Math.max(0, ledgerBalance - pendingAmount)

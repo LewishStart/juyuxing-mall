@@ -11,7 +11,7 @@ Page({
   async load() {
     this.setData({ loading: true });
     const result = await API.getAgentCommissions({ pageSize: 50 }, { silent: true });
-    const statusText = { frozen: '冻结中', settled: '可提现', paid: '已提现', cancelled: '已取消' };
+    const statusText = { frozen: '冻结中', settled: '可提现', withdrawing: '提现处理中', paid: '已提现', cancelled: '已取消' };
     this.setData({
       loading: false,
       list: ((result && result.data) || []).map(item => ({

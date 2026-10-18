@@ -167,10 +167,11 @@ exports.main = async (event) => {
         if (!agent) return { success: false, error: '分销员身份未激活' };
         const now = new Date();
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const [agentOrders, list, team] = await Promise.all([
+        const [agentOrders, list, team, applications] = await Promise.all([
           listAll('orders', { agentId: OPENID }),
           listAll('commissions', { agentId: OPENID }),
-          db.collection('users').where({ referrer: OPENID }).count()
+          db.collection('users').where({ referrer: OPENID }).count(),
+          listAll('withdrawals', { agentId: OPENID })
         ]);
         const monthOrders = agentOrders.filter(order =>
           ['paid', 'shipped', 'received', 'refunding', 'refunded'].includes(order.status) &&
@@ -179,13 +180,15 @@ exports.main = async (event) => {
         const sum = status => list.filter(item => item.status === status)
           .reduce((total, item) => total + (Number(item.amount) || 0), 0);
         const frozen = sum('frozen');
-        const available = sum('settled');
+        const pending = applications.filter(w => ['pending', 'processing'].includes(w.status))
+          .reduce((total, w) => total + (Number(w.amount) || 0), 0);
+        const available = Math.max(0, sum('settled') - pending);
         const paid = sum('paid');
-        const totalCommission = frozen + available + paid;
+        const totalCommission = frozen + sum('settled') + sum('withdrawing') + paid;
         const monthSales = monthOrders.filter(order => order.status !== 'refunded')
           .reduce((total, order) => total + (Number(order.totalFee) || 0), 0);
         return {
-          success: true, totalCommission, frozen, pending: frozen, available, paid,
+          success: true, totalCommission, frozen, pending: frozen, available, paid, withdrawing: sum('withdrawing'),
           monthSales, monthCommission: monthOrders.reduce((total, order) => total + (Number(order.commission) || 0), 0),
           monthOrders: monthOrders.length, teamCount: team.total || 0,
           code: agent.referralCode || ''

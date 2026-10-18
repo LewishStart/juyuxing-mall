@@ -31,7 +31,7 @@ exports.applyRefundEffects = async (transaction, db, order, refund, shouldRestoc
         await transaction.collection('commissions').doc(commission._id).update({ data: {
           status: 'cancelled', cancelReason: 'order_refund', cancelTime: db.serverDate()
         } });
-      } else if (commission.status === 'settled' || commission.status === 'paid') {
+      } else if (['settled', 'paid', 'withdrawing'].includes(commission.status)) {
         hasReversal = true;
         const reversalKey = 'commission_refund:' + refund._id + ':' + commission._id;
         const exists = await transaction.collection('commissions').where({ idempotencyKey: reversalKey }).count();
