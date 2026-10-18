@@ -232,9 +232,10 @@ if (initSrc.includes('admin_config')) {
 }
 
 const adminSrc = read('cloudfunctions/admin/index.js');
-if (adminSrc.includes("status: 'paid'") &&
-    adminSrc.includes('paidByWithdrawal')) {
-  ok('admin.processWithdrawal 会消耗 settled 佣金（防重复提现）');
+const withdrawalEffectsSrc = read('cloudfunctions/admin/withdrawal-effects.js');
+if (adminSrc.includes('createWithdrawalService') && withdrawalEffectsSrc.includes("status: 'withdrawing'") &&
+    withdrawalEffectsSrc.includes('paidByWithdrawal') && withdrawalEffectsSrc.includes("status: 'paid'")) {
+  ok('提现审核占用佣金，渠道成功后才标已支付（防重复提现与提前入账）');
 } else {
   fail('admin.processWithdrawal', '未发现消耗 settled 佣金的逻辑');
 }
@@ -458,14 +459,15 @@ if (reservationUnique && commissionUnique && withdrawalUnique && refundUnique) {
   fail('幂等唯一索引', '库存、佣金、提现或退款缺少 idempotencyKey 唯一索引');
 }
 if (withdrawalSrc.includes('withTransaction') && withdrawalSrc.includes('withdrawalVersion') &&
-    withdrawalSrc.includes('idempotencyKey') && adminSrc.includes("payoutMode: 'wechat_transfer'") &&
-    adminSrc.includes('initiateTransfer')) {
+    withdrawalSrc.includes('idempotencyKey') && withdrawalEffectsSrc.includes("payoutMode: 'wechat_transfer'") &&
+    withdrawalEffectsSrc.includes('initiateTransfer') && withdrawalEffectsSrc.includes('transferClaimToken')) {
   ok('提现申请与自动转账打款具备事务和幂等保护');
 } else {
   fail('提现事务保护', '申请或审核缺少事务冲突字段、幂等键或自动转账标识');
 }
 const distributorWithdrawalSrc = read('miniprogram/subpackages/distributor/withdrawal/withdrawal.js');
-if (adminSrc.includes('getOwnWithdrawalTransfer') && adminSrc.includes('packageInfo: transfer.packageInfo') &&
+if (adminSrc.includes('getOwnWithdrawalTransfer') && withdrawalEffectsSrc.includes('data.packageInfo') &&
+    withdrawalEffectsSrc.includes('wd.agentId !== openId') &&
     apiSrc.includes('getOwnWithdrawalTransfer') &&
     distributorWithdrawalSrc.includes('wx.requestMerchantTransfer')) {
   ok('提现转账保存确认凭证并由分销员本人拉起微信收款确认页');

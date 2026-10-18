@@ -9,6 +9,7 @@
 // =============================================================
 
 'use strict';
+require('./lib/payment-test-network');
 
 const path = require('path');
 const Module = require('module');
@@ -254,8 +255,13 @@ const wxServerSdk = cloud; // 兼容 require('wx-server-sdk') 直接拿到 cloud
 // 劫持 require('wx-server-sdk')
 const origResolve = Module._resolveFilename;
 const origLoad = Module._load;
+let mockTransferState = 'WAIT_USER_CONFIRM';
 Module._load = function (request, parent, isMain) {
   if (request === 'wx-server-sdk') return wxServerSdk;
+  if (request === './wxpay-transfer') {
+    const client = origLoad.apply(this, arguments);
+    return { ...client, queryBill: async () => ({ state: mockTransferState }) };
+  }
   if (request === '@cloudbase/node-sdk') {
     return {
       init() {
@@ -667,12 +673,19 @@ async function main() {
   const approve = (await call('admin', { action: 'processWithdrawal', withdrawalId: wdId, approve: true, remark: '已打款' })).result;
   step('审批通过', approve.success, 'consumed=' + (approve.consumed || ''));
 
-  // 验证佣金：原 settled 记录被拆分,新一条 paid 记录挂在本次提现上
+  // 审核只占用佣金，渠道确认后才记已支付和现金支出。
   const originalComm = db._store.commissions.find(c => c.orderId === orderId && c.status === 'settled');
   step('原 settled 佣金扣减到 920', originalComm && originalComm.amount === 920, '实际=' + (originalComm && originalComm.amount));
   const paidComm = db._store.commissions.find(c => c.paidByWithdrawal === _wdIdForCheck);
-  step('拆分出 paid 佣金 1000', paidComm && paidComm.amount === 1000, '实际=' + (paidComm && paidComm.amount));
-  step('paid 佣金 status=paid', paidComm && paidComm.status === 'paid', '实际=' + (paidComm && paidComm.status));
+  step('拆分出占用佣金 1000', paidComm && paidComm.amount === 1000, '实际=' + (paidComm && paidComm.amount));
+  step('占用佣金 status=withdrawing', paidComm && paidComm.status === 'withdrawing', '实际=' + (paidComm && paidComm.status));
+  step('待确认时不记现金支出', !db._store.cashflow_entries.some(entry => entry.idempotencyKey === 'commission_payout:' + wdId));
+  setOpenId('mock-agent-A');
+  const heldInfo = (await call('withdrawal', { action: 'info' })).result;
+  const heldDash = (await call('agent', { action: 'dashboard' })).result;
+  const heldList = (await call('agent', { action: 'commissions' })).result;
+  step('提现余额与看板可用一致', heldInfo.available === heldDash.available && heldDash.paid === 0);
+  step('佣金列表保留占用状态', heldList.data.some(c => c.status === 'withdrawing'));
 
   // 审核后已向微信发起转账，并保存 C 端拉起确认页所需的 package_info。
   const wdDoc = db._store.withdrawals.find(w => w._id === wdId);
@@ -686,6 +699,12 @@ async function main() {
   const ownReceive = (await call('admin', { action: 'getOwnWithdrawalTransfer', withdrawalId: wdId })).result;
   step('分销员本人取得微信确认参数', ownReceive.success && ownReceive.ready &&
     ownReceive.mchId && ownReceive.appId && ownReceive.packageInfo === wdDoc.packageInfo);
+
+  mockTransferState = 'SUCCESS';
+  setOpenId('mock-owner');
+  const confirmed = (await call('admin', { action: 'queryWithdrawalTransfer', withdrawalId: wdId })).result;
+  step('模拟渠道确认成功后完成提现', confirmed.success && db._store.withdrawals.find(w => w._id === wdId).status === 'success');
+  step('渠道成功后才标已支付', db._store.commissions.find(c => c.paidByWithdrawal === wdId).status === 'paid');
 
   // 重复审批应返回同一结果，且不能重复写资金流水。
   setOpenId('mock-owner');

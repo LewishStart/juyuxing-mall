@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+require('./lib/payment-test-network');
 
 const assert = require('assert');
 const fs = require('fs');
@@ -74,7 +75,7 @@ async function testQuery() {
   response = new Error('test timeout');
   result = await main(event);
   assert.equal(result.success, false);
-  assert(result.error.includes('test timeout'));
+  assert(/timeout|超时|未知/i.test(result.error));
   const count = queries;
   openId = 'test-consumer';
   assert.equal((await main(event)).success, false);
