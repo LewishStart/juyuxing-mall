@@ -8,7 +8,8 @@ const db = cloud.database();
 const _ = db.command;
 
 function withTransaction(work) {
-  return typeof db.runTransaction === 'function' ? db.runTransaction(work) : work(db);
+  if (typeof db.runTransaction !== 'function') throw new Error('提现需要数据库事务支持');
+  return db.runTransaction(work);
 }
 
 function normalizeRequestId(value) {
@@ -17,35 +18,67 @@ function normalizeRequestId(value) {
   return crypto.randomBytes(16).toString('hex');
 }
 
+// Bounded, immutable-key cursor scan. Never accept a truncated financial ledger.
+async function scanLedger(database, name, filter, command, max = 2000) {
+  const rows = [];
+  let cursor = '';
+  for (;;) {
+    const where = cursor ? { ...filter, _id: command.gt(cursor) } : filter;
+    const result = await database.collection(name).where(where).orderBy('_id', 'asc').limit(100).get();
+    if (!result || !Array.isArray(result.data)) throw new Error('账本读取不完整，请核对原单');
+    const page = result.data;
+    for (const row of page) {
+      if (typeof row._id !== 'string' || !row._id || row._id <= cursor) throw new Error('账本分页不完整，请核对原单');
+      cursor = row._id;
+      rows.push(row);
+    }
+    if (rows.length > max) throw new Error('账本超过单次安全核对容量，请联系财务分批核对');
+    if (page.length < 100) return rows;
+  }
+}
+
+function money(value, positive = false) {
+  if (!Number.isSafeInteger(value) || positive && value <= 0) throw new Error('账本金额无效，请核对原单');
+  return value;
+}
+function sumMoney(rows) {
+  return rows.reduce((sum, row) => money(sum + money(row.amount)), 0);
+}
+
+async function agentBalance(database, agentId, command) {
+  const commissions = await scanLedger(database, 'commissions', { agentId, status: command.in(['settled', 'withdrawing', 'frozen']) }, command);
+  const applications = await scanLedger(database, 'withdrawals', { agentId, status: command.in(['pending', 'processing', 'pending_pay', 'transferring']) }, command);
+  return balanceRows(commissions, applications);
+}
+
+function balanceRows(commissions, applications) {
+  const holds = new Map();
+  for (const row of commissions.filter(c => c.status === 'withdrawing')) {
+    if (!row.paidByWithdrawal) throw new Error('提现占用缺少原申请，请核对原单');
+    money(row.amount, true);
+    holds.set(row.paidByWithdrawal, money((holds.get(row.paidByWithdrawal) || 0) + row.amount));
+  }
+  let pendingAmount = 0;
+  for (const application of applications) {
+    money(application.amount, true);
+    const held = holds.get(application._id);
+    if (held !== undefined && held !== application.amount) throw new Error('提现占用账本不一致');
+    if (held === undefined && application.accountingVersion === 2 && ['pending_pay', 'transferring'].includes(application.status)) throw new Error('提现占用账本缺失');
+    pendingAmount = money(pendingAmount + application.amount);
+    holds.delete(application._id);
+  }
+  // An unmatched hold still occupies the balance; never make it available twice.
+  for (const held of holds.values()) pendingAmount = money(pendingAmount + held);
+  const ledgerBalance = sumMoney(commissions.filter(c => c.status !== 'frozen'));
+  const frozen = commissions.filter(c => c.status === 'frozen');
+  return { commissions, applications, ledgerBalance, pendingAmount,
+    pendingCount: applications.length + holds.size, frozenAmount: sumMoney(frozen), frozenCount: frozen.length,
+    available: Math.max(0, money(ledgerBalance - pendingAmount)) };
+}
+
 async function getBalance(database, agentId) {
-  // 注意：此函数会被传入事务对象调用。云开发事务会话不支持并发请求（Promise.all 会报
-  // TransactionBusy -501001），必须逐个 await 顺序执行查询。
-  const commissionRes = await database.collection('commissions')
-    .where({ agentId, status: 'settled' })
-    .limit(1000)
-    .get();
-  const pendingRes = await database.collection('withdrawals')
-    .where({ agentId, status: _.in(['pending', 'processing']) })
-    .limit(1000)
-    .get();
-  const frozenRes = await database.collection('commissions')
-    .where({ agentId, status: 'frozen' })
-    .limit(1000)
-    .get();
-  const ledgerBalance = (commissionRes.data || [])
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const pendingAmount = (pendingRes.data || [])
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const frozenAmount = (frozenRes.data || [])
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  return {
-    ledgerBalance,
-    pendingAmount,
-    pendingCount: (pendingRes.data || []).length,
-    frozenAmount,
-    frozenCount: (frozenRes.data || []).length,
-    available: Math.max(0, ledgerBalance - pendingAmount)
-  };
+  const { commissions, applications, ...balance } = await agentBalance(database, agentId, _);
+  return balance;
 }
 
 exports.main = async (event) => {
@@ -62,18 +95,18 @@ exports.main = async (event) => {
 
   switch (action) {
     case 'info': {
-      const balance = await getBalance(db, OPENID);
-      return { success: true, ...balance };
+      try { return { success: true, ...await getBalance(db, OPENID) }; }
+      catch (error) { return { success: false, error: error.message || '账本核对未完成' }; }
     }
 
     case 'apply': {
-      const amount = Number(event.amount);
+      const amount = event.amount;
       const name = String(event.name || '').trim();
       const account = String(event.account || '').trim();
       const requestId = normalizeRequestId(event.requestId);
       const idempotencyKey = `withdrawal:${OPENID}:${requestId}`;
 
-      if (!Number.isInteger(amount) || amount <= 0) {
+      if (!Number.isSafeInteger(amount) || amount <= 0) {
         return { success: false, error: '提现金额无效' };
       }
       // 微信商家转账单笔下限为 0.3 元，低于此金额转账接口会直接拒绝
@@ -104,7 +137,7 @@ exports.main = async (event) => {
           // 读写用户版本字段，使同一分销员的并发申请冲突后重新计算余额。
           const latestUserRes = await transaction.collection('users').doc(OPENID).get();
           steps.push('user ok');
-          if (!latestUserRes.data || !latestUserRes.data.isAgent) {
+          if (!latestUserRes.data || !latestUserRes.data.isAgent || !latestUserRes.data.agentInfo || latestUserRes.data.agentInfo.status !== 'active') {
             throw new Error('分销员身份未激活');
           }
           const balance = await getBalance(transaction, OPENID);

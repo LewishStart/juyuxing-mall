@@ -28,7 +28,8 @@ Page({
   },
 
   async onClaim(e) {
-    const id = e.currentTarget.dataset.id;
+    const coupon = e && e.detail && e.detail.coupon;
+    const id = coupon && coupon._id;
     if (!id) return;
     if (!wx.getStorageSync('openId')) {
       wx.showToast({ title: '请先登录', icon: 'none' });

@@ -89,43 +89,9 @@ async function ensureAdminSessionsCollection() {
 async function resolveWechatAccount(openId) {
   if (!openId) return null;
   const bound = await db.collection('admin_accounts')
-    .where({ wechatOpenId: openId, status: 'active' }).limit(1).get().catch(() => ({ data: [] }));
-  if (bound.data && bound.data[0]) return bound.data[0];
-
-  const configRes = await db.collection('admin_config').doc('admin').get().catch(() => null);
-  const config = (configRes && configRes.data) || {};
-  const legacyIds = [config.openId].concat(config.adminOpenIds || []).filter(Boolean);
-
-  // 扫码不授予新权限；仅兼容已明确指定的历史管理员迁移。
-  if (!legacyIds.includes(openId)) return null;
-
-  const ownerRes = await db.collection('admin_accounts')
-    .where({ role: 'owner', status: 'active' }).limit(1).get().catch(() => ({ data: [] }));
-  let owner = ownerRes.data && ownerRes.data[0];
-  if (!owner) {
-    const existingOwner = await db.collection('admin_accounts').doc('owner').get().catch(() => null);
-    if (existingOwner && existingOwner.data) return null;
-    const ownerData = {
-      username: 'owner',
-      displayName: '店主',
-      role: 'owner',
-      status: 'active',
-      wechatOpenId: openId,
-      wechatBindTime: db.serverDate(),
-      migratedFromLegacy: true,
-      createTime: db.serverDate(),
-      updateTime: db.serverDate()
-    };
-    await db.collection('admin_accounts').doc('owner').set({ data: ownerData });
-    owner = { _id: 'owner', ...ownerData };
-  }
-  if (!owner.wechatOpenId) {
-    await db.collection('admin_accounts').doc(owner._id).update({
-      data: { wechatOpenId: openId, wechatBindTime: db.serverDate(), updateTime: db.serverDate() }
-    });
-    owner.wechatOpenId = openId;
-  }
-  return owner.wechatOpenId === openId ? owner : null;
+    .where({ wechatOpenId: openId, status: 'active' }).limit(1).get();
+  const account = bound.data && bound.data[0];
+  return account && ['owner', 'operations', 'finance'].includes(account.role) ? account : null;
 }
 
 async function createSceneQrImage(scene, page, context) {
@@ -256,7 +222,8 @@ async function pollQrLogin(event) {
 
   const accountRes = await db.collection('admin_accounts').doc(ticket.accountId).get().catch(() => null);
   const account = accountRes && accountRes.data;
-  if (!account || account.status !== 'active') return { success: false, status: 'forbidden', error: '后台账号不可用' };
+  if (!account || account.status !== 'active' || !account.wechatOpenId ||
+      hashValue(account.wechatOpenId) !== ticket.confirmedOpenIdHash) return { success: false, status: 'forbidden', error: '后台账号不可用' };
 
   let cloudbaseTicket = '';
   try {
@@ -273,11 +240,17 @@ async function pollQrLogin(event) {
     const latestRes = await transaction.collection('admin_login_tickets').doc(ticket._id).get();
     const latest = latestRes && latestRes.data;
     if (ticketState(latest) !== 'confirmed') return false;
+    const accountResult = await transaction.collection('admin_accounts').doc(account._id).get();
+    const current = accountResult.data;
+    if (!current || current.status !== 'active' || !current.wechatOpenId ||
+        !['owner', 'operations', 'finance'].includes(current.role) ||
+        hashValue(current.wechatOpenId) !== latest.confirmedOpenIdHash) return false;
     await transaction.collection('admin_sessions').add({ data: {
       tokenHash: hashValue(adminToken),
       accountId: account._id,
       role: account.role,
       source: 'wechat_qr',
+      wechatOpenIdHash: latest.confirmedOpenIdHash,
       status: 'active',
       expiresAt,
       createTime: db.serverDate()

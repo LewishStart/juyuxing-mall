@@ -225,16 +225,17 @@ if (withdrawalSrc.includes('amount <= 0') && withdrawalSrc.includes('amount < 30
 }
 
 const initSrc = read('cloudfunctions/init/index.js');
-if (initSrc.includes('admin_config')) {
-  ok('init 函数会创建 admin_config 文档');
+if (initSrc.includes("code: 'MAINTENANCE_DISABLED'")) {
+  ok('运行时 init 写入口默认关闭，不能凭调用请求授予管理员');
 } else {
-  fail('admin_config 创建', 'init 函数中未发现 admin_config 创建逻辑');
+  fail('init 运行时入口', '初始化与管理员设置必须走另行审阅的受控流程');
 }
 
 const adminSrc = read('cloudfunctions/admin/index.js');
-if (adminSrc.includes("status: 'paid'") &&
-    adminSrc.includes('paidByWithdrawal')) {
-  ok('admin.processWithdrawal 会消耗 settled 佣金（防重复提现）');
+const withdrawalEffectsSrc = read('cloudfunctions/admin/withdrawal-effects.js');
+if (adminSrc.includes('createWithdrawalService') && withdrawalEffectsSrc.includes("status: 'withdrawing'") &&
+    withdrawalEffectsSrc.includes('paidByWithdrawal') && withdrawalEffectsSrc.includes("status: 'paid'")) {
+  ok('提现审核占用佣金，渠道成功后才标已支付（防重复提现与提前入账）');
 } else {
   fail('admin.processWithdrawal', '未发现消耗 settled 佣金的逻辑');
 }
@@ -308,20 +309,22 @@ if (cartFunctionSrc.includes("_.in(productIds)") &&
 const paySrc = read('cloudfunctions/pay/index.js');
 const payNotifySrc = read('cloudfunctions/payNotify/index.js');
 const paymentEffectsSrc = read('cloudfunctions/payNotify/payment-effects.js');
+const paymentEffectsCompact = paymentEffectsSrc.replace(/\s+/g, '');
+const payCompact = paySrc.replace(/\s+/g, '');
 if (paySrc.includes('cloud.cloudPay.unifiedOrder') &&
     paySrc.includes('functionName:') &&
     payNotifySrc.includes('confirmPayment') &&
     paymentEffectsSrc.includes("'cashflow_entries'") &&
-    paymentEffectsSrc.includes("status: 'frozen'") &&
-    paymentEffectsSrc.includes("status: 'committed'")) {
+    paymentEffectsCompact.includes("status:'frozen'") &&
+    paymentEffectsCompact.includes("status:'committed'")) {
   ok('支付统一提交库存、现金流及冻结佣金');
 } else {
   fail('pay/payNotify', '支付必须统一提交库存、现金流并冻结佣金');
 }
 
 if (payNotifySrc.includes('event.out_trade_no') &&
-    payNotifySrc.includes('event.return_code') &&
-    payNotifySrc.includes('event.result_code')) {
+    payNotifySrc.includes("field(event, 'returnCode', 'return_code')") &&
+    payNotifySrc.includes("field(event, 'resultCode', 'result_code')")) {
   ok('payNotify 兼容 CloudBase 官方 snake_case 回调字段');
 } else {
   fail('payNotify 回调字段', '必须读取 out_trade_no / return_code / result_code');
@@ -335,15 +338,29 @@ if (payNotifySrc.includes('payerOpenId') && payNotifySrc.includes('totalFee') &&
   fail('payNotify 回调校验', '必须在变更订单前校验回调金额和付款身份');
 }
 
-if (payNotifySrc.match(/errcode:\s*1/) && payNotifySrc.includes('处理异常，请重试')) {
+if (payNotifySrc.match(/errcode:\s*1/) && payNotifySrc.includes('retry or reconcile original order')) {
   ok('payNotify 核心持久化失败返回非零，允许平台重试');
 } else {
   fail('payNotify 重试语义', '持久化异常不能返回 errcode: 0');
 }
 
-if (paySrc.includes("process.env.ALLOW_MOCK_PAY === 'true'") &&
-    paySrc.includes('mockRequested && !paymentConfig.useMockPay') &&
-    paySrc.includes('微信支付尚未配置') &&
+if (payNotifySrc.includes('cloud.cloudPay.queryOrder') &&
+    payNotifySrc.includes('queryOrderNo !== outTradeNo') &&
+    payNotifySrc.includes('queryMerchant !== subMchId') &&
+    payNotifySrc.includes('Number.isSafeInteger(totalFee)')) {
+  ok('支付通知依据权威查单并核验订单、商户及整数金额');
+} else {
+  fail('支付通知可信依据', '不允许仅凭调用者提交的成功标记入账');
+}
+
+const extractedPaymentLifecycle = paySrc.includes('createPaymentLifecycle') &&
+  paymentEffectsSrc.includes('createPaymentLifecycle');
+const mockDoubleGate = payCompact.includes('mockRequested&&!paymentConfig.useMockPay') ||
+  (payCompact.includes("cfg.useMockPay===true&&process.env.ALLOW_MOCK_PAY==='true'") &&
+   payCompact.includes('cfg.useMockPay===true&&!mock'));
+if (payCompact.includes("process.env.ALLOW_MOCK_PAY==='true'") && mockDoubleGate &&
+    (paySrc.includes('微信支付尚未配置') ||
+     (extractedPaymentLifecycle && paymentEffectsSrc.includes('支付商户未配置'))) &&
     !paySrc.includes('return true; // 兜底：未配置商户号时保持 mock')) {
   ok('支付未配置时安全失败，模拟支付采用双开关');
 } else {
@@ -426,9 +443,13 @@ const adminQrConfirmSrc = read('miniprogram/subpackages/admin-auth/confirm/confi
 const adminWebSrc = read('admin-web/app.js');
 const adminWebHtml = read('admin-web/index.html');
 const userWxml = read('miniprogram/pages/user/user.wxml');
+const lifecycleClosesOrders = orderSrc.includes("require('./payment-effects').createPaymentLifecycle") &&
+  orderSrc.includes('lifecycle.close(') && maintenanceSrc.includes('lifecycle.close(') &&
+  paymentEffectsCompact.includes("status:'closed'") &&
+  paymentEffectsCompact.includes("status:'released'");
 if (orderSrc.includes("inventoryStatus: 'reserved'") && orderSrc.includes("collection('inventory_reservations')") &&
     orderSrc.includes('idempotencyKey: `reservation:${orderNo}:${reservationIndex}`') &&
-    orderSrc.includes("status: 'closed'") && maintenanceSrc.includes('payment_timeout')) {
+    (orderSrc.includes("status: 'closed'") || lifecycleClosesOrders) && maintenanceSrc.includes('payment_timeout')) {
   ok('订单创建锁库存，取消/超时释放库存');
 } else fail('库存生命周期', '缺少锁定、释放或超时关单逻辑');
 if (orderSrc.includes('resolveCouponDiscount(transaction') &&
@@ -458,14 +479,15 @@ if (reservationUnique && commissionUnique && withdrawalUnique && refundUnique) {
   fail('幂等唯一索引', '库存、佣金、提现或退款缺少 idempotencyKey 唯一索引');
 }
 if (withdrawalSrc.includes('withTransaction') && withdrawalSrc.includes('withdrawalVersion') &&
-    withdrawalSrc.includes('idempotencyKey') && adminSrc.includes("payoutMode: 'wechat_transfer'") &&
-    adminSrc.includes('initiateTransfer')) {
+    withdrawalSrc.includes('idempotencyKey') && withdrawalEffectsSrc.includes("payoutMode: 'wechat_transfer'") &&
+    withdrawalEffectsSrc.includes('initiateTransfer') && withdrawalEffectsSrc.includes('transferClaimToken')) {
   ok('提现申请与自动转账打款具备事务和幂等保护');
 } else {
   fail('提现事务保护', '申请或审核缺少事务冲突字段、幂等键或自动转账标识');
 }
 const distributorWithdrawalSrc = read('miniprogram/subpackages/distributor/withdrawal/withdrawal.js');
-if (adminSrc.includes('getOwnWithdrawalTransfer') && adminSrc.includes('packageInfo: transfer.packageInfo') &&
+if (adminSrc.includes('getOwnWithdrawalTransfer') && withdrawalEffectsSrc.includes('data.packageInfo') &&
+    withdrawalEffectsSrc.includes('wd.agentId !== openId') &&
     apiSrc.includes('getOwnWithdrawalTransfer') &&
     distributorWithdrawalSrc.includes('wx.requestMerchantTransfer')) {
   ok('提现转账保存确认凭证并由分销员本人拉起微信收款确认页');

@@ -29,21 +29,60 @@ function isActiveAgent(user) {
   return !!(user && user.isAgent && user.agentInfo && user.agentInfo.status === 'active');
 }
 
-async function listAll(collectionName, query, max = 5000) {
-  const pageSize = 100;
-  const data = [];
-  for (let offset = 0; offset < max; offset += pageSize) {
-    const res = await db.collection(collectionName)
-      .where(query)
-      .skip(offset)
-      .limit(pageSize)
-      .get();
-    const page = res.data || [];
-    data.push(...page);
-    if (page.length < pageSize) break;
+// Bounded, immutable-key cursor scan. Never accept a truncated financial ledger.
+async function scanLedger(database, name, filter, command, max = 2000) {
+  const rows = [];
+  let cursor = '';
+  for (;;) {
+    const where = cursor ? { ...filter, _id: command.gt(cursor) } : filter;
+    const result = await database.collection(name).where(where).orderBy('_id', 'asc').limit(100).get();
+    if (!result || !Array.isArray(result.data)) throw new Error('账本读取不完整，请核对原单');
+    const page = result.data;
+    for (const row of page) {
+      if (typeof row._id !== 'string' || !row._id || row._id <= cursor) throw new Error('账本分页不完整，请核对原单');
+      cursor = row._id;
+      rows.push(row);
+    }
+    if (rows.length > max) throw new Error('账本超过单次安全核对容量，请联系财务分批核对');
+    if (page.length < 100) return rows;
   }
-  if (data.length >= max) throw new Error('数据量超过看板安全上限，请联系管理员导出核对');
-  return data;
+}
+
+function money(value, positive = false) {
+  if (!Number.isSafeInteger(value) || positive && value <= 0) throw new Error('账本金额无效，请核对原单');
+  return value;
+}
+function sumMoney(rows) {
+  return rows.reduce((sum, row) => money(sum + money(row.amount)), 0);
+}
+
+function balanceRows(commissions, applications) {
+  const holds = new Map();
+  for (const row of commissions.filter(c => c.status === 'withdrawing')) {
+    if (!row.paidByWithdrawal) throw new Error('提现占用缺少原申请，请核对原单');
+    money(row.amount, true);
+    holds.set(row.paidByWithdrawal, money((holds.get(row.paidByWithdrawal) || 0) + row.amount));
+  }
+  let pendingAmount = 0;
+  for (const application of applications) {
+    money(application.amount, true);
+    const held = holds.get(application._id);
+    if (held !== undefined && held !== application.amount) throw new Error('提现占用账本不一致');
+    if (held === undefined && application.accountingVersion === 2 && ['pending_pay', 'transferring'].includes(application.status)) throw new Error('提现占用账本缺失');
+    pendingAmount = money(pendingAmount + application.amount);
+    holds.delete(application._id);
+  }
+  // An unmatched hold still occupies the balance; never make it available twice.
+  for (const held of holds.values()) pendingAmount = money(pendingAmount + held);
+  const ledgerBalance = sumMoney(commissions.filter(c => c.status !== 'frozen'));
+  const frozen = commissions.filter(c => c.status === 'frozen');
+  return { commissions, applications, ledgerBalance, pendingAmount,
+    pendingCount: applications.length + holds.size, frozenAmount: sumMoney(frozen), frozenCount: frozen.length,
+    available: Math.max(0, money(ledgerBalance - pendingAmount)) };
+}
+
+async function listAll(collectionName, query, max = 2000) {
+  return scanLedger(db, collectionName, query, _, max);
 }
 
 async function requireAgent(openId) {
@@ -167,26 +206,28 @@ exports.main = async (event) => {
         if (!agent) return { success: false, error: '分销员身份未激活' };
         const now = new Date();
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        const [agentOrders, list, team] = await Promise.all([
+        const [agentOrders, list, team, applications] = await Promise.all([
           listAll('orders', { agentId: OPENID }),
           listAll('commissions', { agentId: OPENID }),
-          db.collection('users').where({ referrer: OPENID }).count()
+          db.collection('users').where({ referrer: OPENID }).count(),
+          listAll('withdrawals', { agentId: OPENID })
         ]);
         const monthOrders = agentOrders.filter(order =>
           ['paid', 'shipped', 'received', 'refunding', 'refunded'].includes(order.status) &&
           order.payTime && new Date(order.payTime) >= monthStart
         );
         const sum = status => list.filter(item => item.status === status)
-          .reduce((total, item) => total + (Number(item.amount) || 0), 0);
+          .reduce((total, item) => money(total + money(item.amount)), 0);
         const frozen = sum('frozen');
-        const available = sum('settled');
+        const balance = balanceRows(list.filter(c => ['settled', 'withdrawing', 'frozen'].includes(c.status)), applications.filter(w => ['pending', 'processing', 'pending_pay', 'transferring'].includes(w.status)));
+        const available = balance.available;
         const paid = sum('paid');
-        const totalCommission = frozen + available + paid;
+        const totalCommission = money(money(money(frozen + sum('settled')) + sum('withdrawing')) + paid);
         const monthSales = monthOrders.filter(order => order.status !== 'refunded')
-          .reduce((total, order) => total + (Number(order.totalFee) || 0), 0);
+          .reduce((total, order) => money(total + money(order.totalFee)), 0);
         return {
-          success: true, totalCommission, frozen, pending: frozen, available, paid,
-          monthSales, monthCommission: monthOrders.reduce((total, order) => total + (Number(order.commission) || 0), 0),
+          success: true, totalCommission, frozen, pending: frozen, available, paid, withdrawing: sum('withdrawing'),
+          monthSales, monthCommission: monthOrders.reduce((total, order) => money(total + money(order.commission === undefined ? 0 : order.commission)), 0),
           monthOrders: monthOrders.length, teamCount: team.total || 0,
           code: agent.referralCode || ''
         };
@@ -212,7 +253,7 @@ exports.main = async (event) => {
             _id: commission._id,
             orderNo: maskOrderNo(commission.orderNo),
             productNames: order ? (order.items || []).map(item => item.name).slice(0, 3) : [],
-            amount: Number(commission.amount) || 0,
+            amount: money(commission.amount),
             type: commission.type || 'earning', status: commission.status,
             createTime: commission.createTime, settleTime: commission.settleTime || null,
             paidTime: commission.paidTime || null

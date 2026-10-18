@@ -56,3 +56,5 @@ cloudbaserc.json                 云函数和定时触发器定义
 不要提交商户密钥、OpenID、管理员密码或其他凭据。`miniprogram/app.js`、`cloudbaserc.json` 和 `admin-web/app.js` 必须使用同一个 CloudBase 环境。
 
 完整的数据库、迁移、云函数和试运行步骤见 [A/B/C 上线清单](docs/ABC-DEPLOYMENT.md)。上线前必须由具备真实商户权限的账号完成人工小额支付、退款和提现验收。
+
+同事只需接收[项目交付说明](docs/项目交付说明-2026-10-18.md)，其中已包含待办完成情况、修复成果、代码交付范围及部署验收要求。

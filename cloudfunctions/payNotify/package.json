@@ -4,6 +4,9 @@
   "description": "微信云支付回调处理",
   "main": "index.js",
   "dependencies": {
-    "wx-server-sdk": "~2.6.3"
+    "wx-server-sdk": "2.6.3"
+  },
+  "overrides": {
+    "typescript": "5.9.3"
   }
 }

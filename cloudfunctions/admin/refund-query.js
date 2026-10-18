@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { loadPayApiConfig, directQueryRefund } = require('./wxpay-direct');
+const { event: diagnostic, safeError, errorCode } = require('./payment-diagnostics');
 
 const APP_ID = 'wx6e685f787f1cd099';
 
@@ -38,7 +39,7 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
     if (!subMchId) return { success: false, error: '未配置微信支付商户号，无法查询退款' };
 
     // ===== 优先走直连查询（只需 APIv2 密钥，不需要证书，不受 CloudBase access_token 影响）=====
-    const payApiCfg = await loadPayApiConfig(db);
+    const payApiCfg = await loadPayApiConfig(db, false);
     if (payApiCfg && payApiCfg.apiV2Key) {
       try {
         const wxResp = await directQueryRefund({
@@ -47,7 +48,7 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
           apiV2Key: payApiCfg.apiV2Key,
           outRefundNo
         });
-        console.log('[directQueryRefund] 微信返回:', JSON.stringify(wxResp).slice(0, 800));
+        diagnostic(console, 'refund.query_response', { id: refundId, channel: 'direct' });
         if (wxResp.return_code === 'SUCCESS' && wxResp.result_code === 'FAIL' && wxResp.err_code === 'REFUNDNOTEXIST') {
           return { success: true, data: { ...base, status: 'NOT_FOUND', message: '暂未查到此退款单。可能存在延迟或历史单号差异，不代表可以安全重复退款。' } };
         }
@@ -62,7 +63,7 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
             if (returnedNo !== outRefundNo) continue;
             const status = wxResp['refund_status_' + i];
             const amount = Number(wxResp['refund_fee_' + i]);
-            if (STATUS_TEXT[status] && Number.isSafeInteger(amount) && amount > 0) {
+            if (STATUS_TEXT[status] && Number.isSafeInteger(amount) && amount === order.totalFee && wxResp.out_trade_no === order.orderNo) {
               return { success: true, data: { ...base, status, amount, via: 'direct_api',
                 wechatRefundId: String(wxResp['refund_id_' + i] || ''),
                 message: STATUS_TEXT[status] + ' 本次查询未更改订单或账本。'
@@ -72,7 +73,7 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
         }
         return { success: false, error: '直连查询返回数据不完整，不能确认资金状态' };
       } catch (directErr) {
-        console.warn('[directQueryRefund] 异常，回退 cloudPay:', directErr.message || directErr);
+        diagnostic(console, 'refund.query_direct_failed', { id: refundId, code: directErr.code });
         // 直连失败 → 继续走下面的 cloudPay 查询
       }
     }
@@ -101,7 +102,8 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
       if (returnedNo !== outRefundNo) continue;
       const status = field(response, 'refundStatus' + i, 'refund_status_' + i);
       const amount = Number(field(response, 'refundFee' + i, 'refund_fee_' + i));
-      if (!STATUS_TEXT[status] || !Number.isSafeInteger(amount) || amount <= 0) {
+      const tradeNo = field(response, 'outTradeNo', 'out_trade_no');
+      if (!STATUS_TEXT[status] || !Number.isSafeInteger(amount) || amount !== order.totalFee || tradeNo && tradeNo !== order.orderNo) {
         return { success: false, error: '退款状态或金额无法识别，请核查商户平台' };
       }
       return { success: true, data: { ...base, status, amount,
@@ -111,7 +113,7 @@ exports.queryRefundStatus = async (cloud, db, refundId) => {
     }
     return { success: false, error: '渠道返回的退款单号与本次申请不匹配，不能确认退款结果' };
   } catch (err) {
-    return { success: false, code: String((err && (err.errCode || err.code)) || '').slice(0, 80),
-      error: '退款查询异常：' + String((err && (err.errMsg || err.message)) || '未知错误').slice(0, 500) + '；查询失败不代表退款失败，请勿直接重试退款。' };
+    diagnostic(console, 'refund.query_failed', { id: refundId, code: err.code });
+    return { success: false, code: errorCode(err), error: safeError(err) + '；查询失败不代表退款失败，请勿直接重试退款。' };
   }
 };

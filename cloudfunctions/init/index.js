@@ -1,3 +1,5 @@
+'use strict';
+
 const cloud = require('wx-server-sdk');
 const ENV_ID = 'cloud1-d4gx1jxk675274501';
 cloud.init({ env: ENV_ID });
@@ -155,7 +157,9 @@ const COLLECTIONS = [
   'pay_config'
 ];
 
-exports.main = async (event) => {
+exports.main = async () => ({ success: false, code: 'MAINTENANCE_DISABLED', error: 'Runtime maintenance is disabled; use a separately reviewed controlled migration.' });
+
+async function retiredMaintenance(event = {}, context) {
   const action = event.action || 'init';
 
   if (action === 'init') {

@@ -3,99 +3,88 @@
 const cloud = require('wx-server-sdk');
 cloud.init({ env: 'cloud1-d4gx1jxk675274501' });
 const db = cloud.database();
+const crypto = require('crypto');
 const confirmPayment = require('./payment-effects').createPaymentEffects(cloud, db);
 
-// 回调事件留痕：真实回调格式/失败原因落库，便于诊断（集合自动创建，写入失败不阻断主流程）
 async function recordEvent(kind, payload) {
   try {
     await db.collection('paynotify_events').add({ data: { kind, payload, time: db.serverDate() } });
-  } catch (err) {
-    try {
-      await db.createCollection('paynotify_events');
-      await db.collection('paynotify_events').add({ data: { kind, payload, time: db.serverDate() } });
-    } catch (e) {}
+  } catch (error) {
+    console.warn('[payNotify] diagnostic write failed');
   }
 }
 
-function generateNonceStr(length = 32) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let str = '';
-  for (let i = 0; i < length; i++) str += chars.charAt(Math.floor(Math.random() * chars.length));
-  return str;
+function field(value, camel, snake) {
+  return value[camel] === undefined ? value[snake] : value[camel];
 }
 
-exports.main = async (event) => {
-  // ===== 维护入口（微信回调不带 action 字段）：从微信侧同步订单真实交易单号 =====
-  if (event && event.action === 'syncTransaction') {
-    const outTradeNo = String(event.outTradeNo || '').trim();
-    if (!outTradeNo) return { success: false, error: '缺少订单号' };
-    const cfgRes = await db.collection('pay_config').doc('default').get().catch(() => null);
-    const subMchId = String((cfgRes && cfgRes.data && cfgRes.data.subMchId) || '').trim();
-    if (!subMchId) return { success: false, error: '未配置商户号' };
-    const query = await cloud.cloudPay.queryOrder({
-      subMchId, outTradeNo, nonceStr: generateNonceStr()
-    }).catch(err => ({ __error: String(err && (err.errMsg || err.message || err)) }));
-    if (query.__error) return { success: false, error: query.__error };
-    const tradeState = query.tradeState || query.trade_state || '';
-    if (tradeState !== 'SUCCESS') return { success: false, error: '微信侧交易状态: ' + tradeState };
-    const transactionId = query.transactionId || query.transaction_id || '';
-    const orderRes = await db.collection('orders').where({ orderNo: outTradeNo }).limit(1).get().catch(() => ({ data: [] }));
-    const order = orderRes.data && orderRes.data[0];
-    if (!order) return { success: false, error: '订单不存在' };
-    await db.collection('orders').doc(order._id).update({
-      data: { transactionId: transactionId || order.transactionId || '', updateTime: db.serverDate() }
-    });
-    return { success: true, transactionId };
+// Do not trust callback-supplied SUCCESS, transaction or amounts. A server-side
+// query under the order's proven original merchant is the authority, regardless of invoke SOURCE.
+async function verifiedPayment(outTradeNo) {
+  const orderRes = await db.collection('orders').where({ orderNo: outTradeNo }).limit(1).get();
+  const order = orderRes.data && orderRes.data[0];
+  if (!order) throw new Error('Order not found');
+  // An old prepay ID does not prove merchant ownership. Never adopt the current
+  // configuration (or caller input) for an order whose original merchant is unknown.
+  const subMchId = typeof order.paymentSubMchId === 'string' ? order.paymentSubMchId.trim() : '';
+  if (!subMchId) throw new Error('Original payment merchant is unproven');
+  const query = await cloud.cloudPay.queryOrder({ subMchId, outTradeNo, nonceStr: crypto.randomBytes(16).toString('hex') });
+  if (!query || field(query, 'returnCode', 'return_code') !== 'SUCCESS' ||
+      field(query, 'resultCode', 'result_code') !== 'SUCCESS' ||
+      field(query, 'tradeState', 'trade_state') !== 'SUCCESS') throw new Error('Payment is not confirmed');
+  const transactionId = String(field(query, 'transactionId', 'transaction_id') || '').trim();
+  const queryOrderNo = String(field(query, 'outTradeNo', 'out_trade_no') || '').trim();
+  const queryMerchant = String(field(query, 'subMchId', 'sub_mch_id') || '').trim();
+  const rawFee = field(query, 'totalFee', 'total_fee');
+  const totalFee = rawFee === undefined || rawFee === null || rawFee === '' ? NaN : Number(rawFee);
+  if (!transactionId || queryOrderNo !== outTradeNo || queryMerchant !== subMchId ||
+      !Number.isSafeInteger(totalFee) || totalFee <= 0 || totalFee !== Number(order.totalFee)) {
+    throw new Error('Payment query association mismatch');
   }
+  // Service-provider OPENID belongs to a different app. Only sub_openid is
+  // comparable with this Mini Program's order.userId; never compare query.openid.
+  const payerOpenId = String(field(query, 'subOpenid', 'sub_openid') || '');
+  if (payerOpenId && payerOpenId !== order.userId) throw new Error('Payment payer mismatch');
+  if (order.transactionId && order.transactionId !== transactionId) throw new Error('Payment transaction mismatch');
+  return { order, transactionId, totalFee, payerOpenId, subMchId };
+}
 
-  const outTradeNo = event.out_trade_no || event.outTradeNo || '';
-  const transactionId = event.transaction_id || event.transactionId || '';
-  // 服务商模式：event.openid 是微信支付平台侧标识，event.subOpenid 才是本小程序侧用户标识（与订单 userId 同源）
-  const payerOpenId = event.subOpenid || event.sub_openid || '';
-  const totalFeeValue = event.total_fee === undefined ? event.totalFee : event.total_fee;
-  const totalFee = totalFeeValue === undefined || totalFeeValue === null || totalFeeValue === ''
-    ? null
-    : Number(totalFeeValue);
-  const resultCode = event.result_code || event.resultCode || '';
-  const returnCode = event.return_code || event.returnCode || '';
+async function canSync(openId) {
+  if (!openId) return false;
+  const result = await db.collection('admin_accounts')
+    .where({ wechatOpenId: openId, status: 'active' }).limit(1).get();
+  const account = result.data && result.data[0];
+  return !!(account && ['owner', 'finance'].includes(account.role));
+}
 
-  if (returnCode !== 'SUCCESS' || resultCode !== 'SUCCESS') {
-    await recordEvent('skipped', { outTradeNo, returnCode, resultCode });
-    return { errcode: 0, errmsg: '支付未成功，无需处理' };
-  }
-  if (!outTradeNo) {
-    await recordEvent('bad_request', { event });
-    return { errcode: 1, errmsg: '缺少商户订单号' };
-  }
-  if (totalFee !== null && (!Number.isInteger(totalFee) || totalFee <= 0)) {
-    await recordEvent('bad_fee', { outTradeNo, totalFee });
-    return { errcode: 1, errmsg: '支付金额格式错误' };
-  }
-
-  await recordEvent('received', {
-    outTradeNo, transactionId, payerOpenId,
-    totalFee, openid: event.openid || '', subAppid: event.subAppid || event.sub_appid || ''
-  });
-
+exports.main = async (event = {}) => {
+  const maintenance = event.action === 'syncTransaction';
   try {
-    const result = await confirmPayment({
-      outTradeNo,
-      transactionId,
-      payerOpenId,
-      totalFee,
-      source: 'payNotify'
-    });
-    await recordEvent('processed', { outTradeNo, orderId: result.orderId });
-    console.log('[payNotify] 支付副作用已确认:', result.orderId);
-    return { errcode: 0, errmsg: 'success' };
-  } catch (err) {
-    // 只有 sub_openid 与订单 userId 同源；它一旦明确不一致就必须拒绝。
-    // 回调未携带 sub_openid 时 payerOpenId 为空，事务层不会做跨口径误判。
-    if (err && err.message === '付款身份与订单用户不一致') {
-      await recordEvent('payer_mismatch', { outTradeNo, payerOpenId, openid: event.openid || '' });
+    if (event.action && !maintenance) return { success: false, error: 'Unknown action' };
+    if (maintenance && !await canSync(cloud.getWXContext().OPENID)) {
+      return { success: false, error: 'Forbidden', code: 'FORBIDDEN' };
     }
-    await recordEvent('error', { outTradeNo, error: String(err && (err.message || err)) });
-    console.error('[payNotify] 处理失败:', err);
-    return { errcode: 1, errmsg: '处理异常，请重试' };
+    const outTradeNo = String(event.outTradeNo || event.out_trade_no || '').trim();
+    if (!outTradeNo) throw new Error('Missing order number');
+    if (!maintenance && (field(event, 'returnCode', 'return_code') !== 'SUCCESS' ||
+        field(event, 'resultCode', 'result_code') !== 'SUCCESS')) {
+      return { errcode: 0, errmsg: 'Payment not successful; no effects' };
+    }
+    const verified = await verifiedPayment(outTradeNo);
+    if (maintenance) {
+      await db.collection('orders').doc(verified.order._id).update({
+        data: { transactionId: verified.transactionId, updateTime: db.serverDate() }
+      });
+      return { success: true, transactionId: verified.transactionId };
+    }
+    const result = await confirmPayment({ outTradeNo, transactionId: verified.transactionId,
+      totalFee: verified.totalFee, payerOpenId: verified.payerOpenId, subMchId: verified.subMchId, source: 'payNotify' });
+    await recordEvent('processed', { outTradeNo, orderId: result.orderId });
+    return { errcode: 0, errmsg: 'success' };
+  } catch (error) {
+    await recordEvent('rejected', { outTradeNo: String(event.outTradeNo || event.out_trade_no || ''),
+      error: String(error && error.message || error) });
+    return maintenance ? { success: false, error: 'Authoritative payment verification failed' }
+      : { errcode: 1, errmsg: 'Payment verification failed; retry or reconcile original order' };
   }
 };

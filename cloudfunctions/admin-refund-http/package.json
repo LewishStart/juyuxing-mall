@@ -4,6 +4,9 @@
   "description": "Admin refund via HTTP trigger (cloud-call context)",
   "main": "index.js",
   "dependencies": {
-    "wx-server-sdk": "~2.6.3"
+    "wx-server-sdk": "2.6.3"
+  },
+  "overrides": {
+    "typescript": "5.9.3"
   }
 }

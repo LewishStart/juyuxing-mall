@@ -225,23 +225,15 @@ exports.main = async (event, context) => {
     }
 
     case 'use': {
-      // 订单提交成功时调用，把券标记为已使用
-      if (!OPENID) return { success: false, code: 'NO_AUTH', error: '请先登录' };
-      const userCouponId = event.userCouponId;
-      const orderId = event.orderId;
-      if (!userCouponId) return { success: false, error: '缺少 userCouponId' };
-      const ucRes = await db.collection(COL_USER_COUPON).doc(userCouponId).get().catch(() => null);
-      if (!ucRes || !ucRes.data) return { success: false, error: '券不存在' };
-      if (ucRes.data.userId !== OPENID) return { success: false, error: '无权操作' };
-      if (ucRes.data.status !== 'unused') return { success: false, error: '该券已使用或失效' };
-      await db.collection(COL_USER_COUPON).doc(userCouponId).update({
-        data: {
-          status: 'used',
-          useTime: db.serverDate(),
-          orderId: orderId || null
-        }
-      });
-      return { success: true };
+      if (!OPENID) return {success:false,code:'NO_AUTH',error:'请先登录'};
+      if(!event.userCouponId)return {success:false,code:'LEGACY_USE_DISABLED',error:'优惠券仅随订单创建事务核销'};
+      const record=(await db.collection(COL_USER_COUPON).doc(event.userCouponId).get()).data;
+      if(!record||record.userId!==OPENID)return {success:false,error:'券不存在或无权操作'};
+      if(record.status==='used'&&record.orderId&&record.orderId===event.orderId) {
+        const order=(await db.collection('orders').doc(record.orderId).get()).data;
+        if(order&&order.userId===OPENID&&order.couponId===event.userCouponId&&Number(order.couponDiscount)>0)return {success:true,alreadyUsed:true,orderId:record.orderId};
+      }
+      return {success:false,code:'LEGACY_USE_DISABLED',error:'优惠券仅随订单创建事务核销，请勿单独核销'};
     }
 
     default:

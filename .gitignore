@@ -19,6 +19,8 @@ project.private.config.json
 
 # Local agent workflow records
 docs/baymax/
+# Review archives stay local; the colleague receives the single handoff document.
+docs/reviews/
 .playwright-cli/
 .workbuddy/screenshots/
 .workbuddy/memory/

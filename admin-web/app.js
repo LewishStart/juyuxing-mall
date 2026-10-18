@@ -142,7 +142,10 @@ const App = {
     const cachedDashboard = readStoredJson('adminDashboardCache', {});
     const stats = ref(cachedDashboard.stats || {});
     const recentOrders = ref(cachedDashboard.recentOrders || []);
-    const finance = ref({ daily: [] });
+    const finance = ref(null);
+    const financeError = ref('');
+    const financeLoading = ref(false);
+    let financeRequestId = 0;
     const inventory = ref([]);
     const invites = ref([]);
     const inviteForm = reactive({ name: '', phone: '' });
@@ -222,6 +225,7 @@ const App = {
     const refundFilters = [
       { label: '待处理', value: 'pending' },
       { label: '已退款', value: 'approved' },
+      { label: '退款库存待恢复', value: 'inventory_pending' },
       { label: '已拒绝', value: 'rejected' },
       { label: '全部', value: 'all' }
     ];
@@ -476,6 +480,10 @@ const App = {
     }
 
     function openShipModal(order) {
+      if (order.paymentResolutionRequired === true) {
+        showToast('库存已释放后确认收款，请按原订单申请仅退款', 'error');
+        return;
+      }
       shipModal.orderId = order._id;
       shipModal.orderNo = order.orderNo;
       shipModal.company = '';
@@ -499,6 +507,13 @@ const App = {
       }
     }
 
+    function formatOrderAddress(address) {
+      if (!address) return '';
+      const region = Array.isArray(address.region) && address.region.length
+        ? address.region : [address.province, address.city, address.district];
+      return region.filter(Boolean).join('') + (address.detail || '');
+    }
+
     function viewOrder(order) {
       orderDetailModal.data = order;
       orderDetailModal.show = true;
@@ -512,17 +527,25 @@ const App = {
       }
     }
 
+    function yuanToFen(value, allowZero = false) {
+      const text = String(value === undefined || value === null ? '' : value).trim();
+      if (!/^(0|[1-9]\d*)(\.\d{1,2})?$/.test(text)) throw new Error('金额请输入最多两位小数的元');
+      const [whole, fraction = ''] = text.split('.');
+      const fen = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+      if (!Number.isSafeInteger(fen) || fen < (allowZero ? 0 : 1)) throw new Error('金额超出范围');
+      return fen;
+    }
+
     function openProductModal(product) {
       if (product) {
         productModal.isEdit = true;
-        productModal.data = { ...product };
+        productModal.data = { ...product, price: (product.price / 100).toFixed(2),
+          originalPrice: ((product.originalPrice || 0) / 100).toFixed(2) };
         productModal.imagesText = (product.images || []).join('\n');
       } else {
         productModal.isEdit = false;
-        productModal.data = {
-          name: '', subtitle: '', price: '', originalPrice: '',
-          stock: '', category: '', description: '', status: 'on'
-        };
+        productModal.data = { name: '', subtitle: '', price: '', originalPrice: '',
+          stock: '', category: '', description: '', status: 'on' };
         productModal.imagesText = '';
       }
       productModal.show = true;
@@ -530,26 +553,23 @@ const App = {
 
     async function saveProduct() {
       const d = productModal.data;
+      let price, originalPrice;
+      try {
+        price = yuanToFen(d.price);
+        originalPrice = d.originalPrice === '' || d.originalPrice === undefined ? 0 : yuanToFen(d.originalPrice, true);
+      } catch (error) { showToast(error.message, 'error'); return; }
       const images = productModal.imagesText.split('\n').map(s => s.trim()).filter(Boolean);
-      const payload = {
-        name: d.name, subtitle: d.subtitle, price: d.price,
-        originalPrice: d.originalPrice, stock: d.stock,
-        category: d.category, description: d.description,
-        images: images, status: d.status || 'on'
-      };
-      let res;
-      if (productModal.isEdit) {
-        res = await callAdmin('updateProduct', { id: d._id, ...payload });
-      } else {
-        res = await callAdmin('createProduct', payload);
-      }
+      const payload = { name: d.name, subtitle: d.subtitle, price, originalPrice,
+        category: d.category, description: d.description, images, status: d.status || 'on' };
+      // Existing multi-SKU inventory is edited per SKU; changing catalog price never rewrites SKU prices.
+      if (!productModal.isEdit || !(d.specs && d.specs.length > 1)) payload.stock = d.stock;
+      const res = productModal.isEdit ? await callAdmin('updateProduct', { id: d._id, ...payload })
+        : await callAdmin('createProduct', payload);
       if (res.success) {
         showToast(productModal.isEdit ? '商品已更新' : '商品已创建');
         productModal.show = false;
         loadProducts();
-      } else {
-        showToast(res.error || '操作失败', 'error');
-      }
+      } else showToast(res.error || '操作失败', 'error');
     }
 
     async function toggleProduct(product, status) {
@@ -580,21 +600,56 @@ const App = {
     }
 
     async function adjustInventory(product) {
-      const input = prompt(`调整「${product.name}」总库存（正数入库，负数出库）`, '0');
+      const specs = product.specs || [];
+      let spec = specs.length === 1 ? specs[0].name : '';
+      if (specs.length > 1) {
+        spec = prompt('请输入要调整的规格名称\n' + specs.map(item => item.name).join(' / '), '');
+        if (spec === null) return;
+        if (!specs.some(item => item.name === spec)) { showToast('请选择有效规格', 'error'); return; }
+      }
+      const input = prompt(`调整「${product.name}」${spec || ''}库存（正数入库，负数出库）`, '0');
       if (input === null) return;
       const quantity = Number(input);
-      if (!Number.isInteger(quantity) || quantity === 0) { showToast('请输入非零整数', 'error'); return; }
-      const reason = prompt('请输入库存调整原因', '人工盘点');
+      if (!Number.isSafeInteger(quantity) || quantity === 0) { showToast('请输入非零整数', 'error'); return; }
+      const reason = String(prompt('请输入库存调整原因', '人工盘点') || '').trim();
       if (!reason) return;
-      const res = await callAdmin('adjustInventory', { productId: product._id, quantity, reason });
-      if (res.success) { showToast('库存已调整'); loadInventory(); }
-      else showToast(res.error || '调整失败', 'error');
+      const actor = currentAccount.value || {};
+      const logicalKey = JSON.stringify([actor.accountId || actor.username || 'session', product._id, spec, quantity, reason]);
+      let pending;
+      try {
+        pending = readStoredJson('inventoryPendingRequests', {});
+        if (!pending[logicalKey]) {
+          pending[logicalKey] = 'inventory_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 14);
+          localStorage.setItem('inventoryPendingRequests', JSON.stringify(pending));
+        }
+      } catch (error) { showToast('无法保存操作凭据，未提交库存调整', 'error'); return; }
+      const res = await callAdmin('adjustInventory', { productId: product._id, spec, quantity, reason, requestId: pending[logicalKey] });
+      if (res.success) {
+        const latestPending = readStoredJson('inventoryPendingRequests', {});
+        if (latestPending[logicalKey] === pending[logicalKey]) delete latestPending[logicalKey];
+        localStorage.setItem('inventoryPendingRequests', JSON.stringify(latestPending));
+        showToast('库存已调整'); loadInventory();
+      } else showToast(res.error || '调整失败，可使用相同参数重试', 'error');
     }
 
     // ===== 经营收支 =====
     async function loadFinance() {
-      const res = await callAdmin('financeOverview');
-      if (res.success) finance.value = res.data || { daily: [] };
+      const requestId = ++financeRequestId;
+      financeLoading.value = true;
+      financeError.value = '';
+      finance.value = null;
+      try {
+        const res = await callAdmin('financeOverview');
+        if (requestId !== financeRequestId) return;
+        if (!res || !res.success || !res.data) throw new Error((res && res.error) || '财务数据不可用');
+        finance.value = res.data;
+      } catch (error) {
+        if (requestId !== financeRequestId) return;
+        finance.value = null;
+        financeError.value = error.message || '财务数据不可用';
+      } finally {
+        if (requestId === financeRequestId) financeLoading.value = false;
+      }
     }
 
     // ===== 分销邀请 =====
@@ -1150,7 +1205,7 @@ const App = {
       });
       processingAction.value = false;
       if (res.success) {
-        showToast(res.message || '处理成功');
+        showToast(res.message || '处理成功', res.inventoryRestockStatus === 'pending_exception' ? 'warning' : 'success');
         withdrawalModal.show = false;
         loadWithdrawals();
         loadDashboard();
@@ -1287,7 +1342,7 @@ const App = {
         const res = await callAdmin('retryRefund', { refundId: rf._id });
         recordRefundDiagnostic(rf, '重试退款', res);
         if (res && res.success) {
-          showToast(res.message || '重试成功', res.channelAccepted ? 'warning' : 'success', 6000);
+          showToast(res.message || '重试成功', res.channelAccepted || res.inventoryRestockStatus === 'pending_exception' ? 'warning' : 'success', 6000);
         } else {
           showToast((res && res.error) || '重试失败，详情已保留', 'error', 8000);
         }
@@ -1323,7 +1378,7 @@ const App = {
               setTimeout(() => showToast(res.warning, 'warning', 8000), 200);
             }
           } else {
-            showToast(res.message || '处理成功');
+            showToast(res.message || '处理成功', res.inventoryRestockStatus === 'pending_exception' ? 'warning' : 'success');
           }
           refundModal.show = false;
           loadRefunds();
@@ -1372,7 +1427,7 @@ const App = {
       // 全局
       isLoggedIn, loading, loginError, qrLogin, currentPage, pages, toast, currentAccount,
       // dashboard
-      stats, recentOrders, finance, inventory, invites, inviteForm, accounts, accountForm,
+      stats, recentOrders, finance, financeError, financeLoading, inventory, invites, inviteForm, accounts, accountForm,
       // orders
       orders, orderFilter, orderFilters, shipModal, orderDetailModal,
       // products
@@ -1390,7 +1445,7 @@ const App = {
       settings, pwdForm, newOpenId, migration, transactionCleanup,
       // methods
       startQrLogin, logout, switchPage,
-      loadDashboard, loadOrders, switchOrderFilter, openShipModal, confirmShip, viewOrder,
+      loadDashboard, loadOrders, switchOrderFilter, openShipModal, confirmShip, viewOrder, formatOrderAddress,
       loadProducts, openProductModal, saveProduct, toggleProduct, deleteProduct,
       loadInventory, adjustInventory, loadFinance,
       loadInvites, createInvite, revokeInvite, inviteQrModal, openInviteQr, closeInviteQr,
