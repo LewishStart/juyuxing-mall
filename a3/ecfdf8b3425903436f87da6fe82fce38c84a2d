@@ -1,0 +1,76 @@
+docs/支付链路部署验收-2026-10-18.md
+  s_1d821ac3bcee1b::t_3cae9ccfb121b6 1-78
+scripts/lib/payment-flow-harness.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 2
+  s_1d821ac3bcee1b::t_297494d45de465 121,128
+  s_1d821ac3bcee1b::t_f4be6a4de298fd 1,3-43,45-65,67-69,71-77,79-120,122,124-127,129-141
+  s_1d821ac3bcee1b::t_7c67acb946f19c 44,66,70,78,123
+docs/交接待办清单-2026-10-17.md
+  s_1d821ac3bcee1b::t_4317dd4689f8e4 1-2,4,6,8,62,70,72,74,82,84,86,128,130,132,134,148,150,154,156,160,162,164,166,168
+  s_1d821ac3bcee1b::t_41b3a75cfdfca0 163,201-202,210,212,216
+  s_1d821ac3bcee1b::t_ebd92ce9cfb025 185,187,189,191,193,195,197,209,211
+  s_1d821ac3bcee1b::t_72136f8d9aaa55 170,172,174,176,178
+  s_1d821ac3bcee1b::t_e9a4e0e9ff7e72 243,259,261,263,265,267,269
+  s_1d821ac3bcee1b::t_2c5276c4254c16 69,126-127,203-204,207,247-257
+  s_1d821ac3bcee1b::t_cc7bce750ed606 213,215,217,219,239,241
+  s_1d821ac3bcee1b::t_e8281d5834d00c 281,301
+  s_1d821ac3bcee1b::t_3cae9ccfb121b6 3,7,258
+  s_1d821ac3bcee1b::t_bd9d672560fa3c 277
+  s_1d821ac3bcee1b::t_c677bca3067da1 175
+  s_1d821ac3bcee1b::t_35667d86f10c21 9-60
+  s_1d821ac3bcee1b::t_e85cc816229536 116
+  s_1d821ac3bcee1b::t_12007eaf207f57 5,61,63-64,66-68,71,73,75-77,79-81,83,85,87-95,97-106,109-114,117-125,129,131,133,135-147,149,151-153,155,157-159,161,165,167,169,171,173,177,179-184,186,188,190,192,194,196,198-199,205-206,208,214,218,220-227,229-238,240,242,244-246,260,262,264,266,268,271-276,278-280,283-300,302-303
+  s_1d821ac3bcee1b::t_5823bc5dc01833 65,78,96,107-108,115,200,228,270,282
+scripts/refund-consistency-test.js
+  s_1d821ac3bcee1b::t_d79c1e4cf23553 239-242,244,248-249,252,254-260,262-271,274-285,297
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 3
+  s_1d821ac3bcee1b::t_cc6e8171c31a18 286-296
+scripts/smoke-test.js
+  s_1d821ac3bcee1b::t_addaab5f93648d 235-238,462-463,469-470
+scripts/refund-diagnostics-test.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 3
+  s_1d821ac3bcee1b::t_d62cebe00efda3 78
+scripts/withdrawal-consistency-test.js
+  s_1d821ac3bcee1b::t_611a997189ebae 98-115
+  s_1d821ac3bcee1b::t_501c94f58c9800 124-133
+  s_1d821ac3bcee1b::t_8ae8760757b71e 33,41
+  s_1d821ac3bcee1b::t_4f977fe106c371 55-97,116-123,134-162
+  s_1d821ac3bcee1b::t_f4be6a4de298fd 1-32,34-40,42-54,163-173
+docs/ABC-DEPLOYMENT.md
+  s_1d821ac3bcee1b::t_b38e96b417c385 157,186,188,191,197-200
+docs/支付链路修复报告-2026-10-18.md
+  s_1d821ac3bcee1b::t_3fdd04fc5e6d60 1-58
+scripts/lib/payment-test-network.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 1-13
+  s_1d821ac3bcee1b::t_ad5df1262c87df 14
+DEPLOY.md
+  s_1d821ac3bcee1b::t_7ca23d276d087a 47-48
+  s_1d821ac3bcee1b::t_b38e96b417c385 33,43-46
+scripts/payment-diagnostics-test.js
+  s_1d821ac3bcee1b::t_ad5df1262c87df 100-131
+  s_1d821ac3bcee1b::t_d62fea67b874ef 1-73,75-85,87-99,156-179
+  s_1d821ac3bcee1b::t_2ae373b9a59943 74,86
+  s_1d821ac3bcee1b::t_297494d45de465 132-155
+package.json
+  s_1d821ac3bcee1b::t_d62cebe00efda3 10
+scripts/e2e-mock.js
+  s_1d821ac3bcee1b::t_cc6e8171c31a18 258,261-264,676,680-688,703-707
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 12
+  s_1d821ac3bcee1b::t_a2128d86d94722 708
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a3ecfdf8b3425903436f87da6fe82fce38c84a2d",
+  "prompts": {},
+  "sessions": {
+    "s_1d821ac3bcee1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14802-7154-7fd1-a067-ea11e09f67e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LewishStart <lewishstart@163.com>"
+    }
+  }
+}
