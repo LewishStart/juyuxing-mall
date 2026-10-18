@@ -1,0 +1,76 @@
+cloudfunctions/admin/wxpay-transfer.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 114
+cloudfunctions/refund-processor/refund-effects.js
+  s_1d821ac3bcee1b::t_f6e854bd442454 34
+cloudfunctions/admin/wxpay-direct.js
+  s_1d821ac3bcee1b::t_df35aa5022660f 76,79,94,100,112-130,166,192,213,226
+cloudfunctions/withdrawal/index.js
+  s_1d821ac3bcee1b::t_2ae373b9a59943 24,37-38,40,46
+cloudfunctions/admin/refund-effects.js
+  s_1d821ac3bcee1b::t_f6e854bd442454 34
+cloudfunctions/agent/index.js
+  s_1d821ac3bcee1b::t_af4202f616c2d4 170,173-174,183-185,187,191
+cloudfunctions/admin/withdrawal-effects.js
+  s_1d821ac3bcee1b::t_5471463d8fac80 28-29
+  s_1d821ac3bcee1b::t_ad5df1262c87df 202
+  s_1d821ac3bcee1b::t_f9a81ded59857f 17,41,50-52,54-56,62,165,168,170,195,211
+  s_1d821ac3bcee1b::t_ae4870c3df7fb5 1-16,18-27,30-40,42-47,63-124,145,147-163,166-167,169,171-176,178,184-194,196-201,203-210,212-219,221-223
+  s_1d821ac3bcee1b::t_7c67acb946f19c 164
+  s_1d821ac3bcee1b::t_7d57825d72bf41 48-49,53,57-61,177,179-183
+  s_1d821ac3bcee1b::t_2ae373b9a59943 133
+  s_1d821ac3bcee1b::t_5c8fb94126800f 125-132,134-144,220
+  s_1d821ac3bcee1b::t_501c94f58c9800 146
+cloudfunctions/admin/payment-diagnostics.js
+  s_1d821ac3bcee1b::t_ad5df1262c87df 22-23
+  s_1d821ac3bcee1b::t_ae4870c3df7fb5 1-6,10-21,30,32-39
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 7-9,24-29,31
+cloudfunctions/refund-processor/payment-diagnostics.js
+  s_1d821ac3bcee1b::t_60ab93c0f1bceb 1-6,10-21,30,32-39
+  s_1d821ac3bcee1b::t_6ca63b239c94bb 7-9,24-29,31
+  s_1d821ac3bcee1b::t_0bb1d99b3ff2e2 22-23
+cloudfunctions/admin/index.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 1547
+  s_1d821ac3bcee1b::t_f6e854bd442454 9-10,303,464,466,788-789,791-792
+  s_1d821ac3bcee1b::t_60ab93c0f1bceb 6-7,19-20,291,918,948
+cloudfunctions/refund-processor/wxpay-direct.js
+  s_1d821ac3bcee1b::t_60ab93c0f1bceb 1-232
+cloudfunctions/refund-processor/index.js
+  s_1d821ac3bcee1b::t_ad5df1262c87df 20,22,27
+  s_1d821ac3bcee1b::t_60ab93c0f1bceb 4-6,8,23-26
+miniprogram/subpackages/distributor/withdrawal/withdrawal.js
+  s_1d821ac3bcee1b::t_2ae373b9a59943 21,35-37,51,61-65,72,109-112
+  s_1d821ac3bcee1b::t_c47f381dd3df85 22-34,52-60,73-74,76,78-80,82,84-89,91-108
+cloudfunctions/admin/refund-query.js
+  s_1d821ac3bcee1b::t_3c3929eb5c0c00 5,42,51,66,76,105-106,116-117
+cloudfunctions/admin/refund-execution.js
+  s_1d821ac3bcee1b::t_5471463d8fac80 79,135,177,179-180,193-195
+  s_1d821ac3bcee1b::t_df35aa5022660f 34-35
+  s_1d821ac3bcee1b::t_0dffac3504db3d 1-15,41,46-47,70,85,111-112,185-187,207-208,221,223-225
+  s_1d821ac3bcee1b::t_0bb1d99b3ff2e2 16-33,36-40,42-45,48,50-69,71-78,80-84,86-110,113-134,136-176,178,181-184,188-192,196-206,209-220,222
+  s_1d821ac3bcee1b::t_f9a81ded59857f 49
+miniprogram/subpackages/distributor/commissions/commissions.js
+  s_1d821ac3bcee1b::t_af4202f616c2d4 14
+cloudfunctions/refund-processor/refund-execution.js
+  s_1d821ac3bcee1b::t_78cb13d4c299e6 49
+  s_1d821ac3bcee1b::t_60ab93c0f1bceb 1-15,34-35,41,46-47,70,85,111-112,183-185,204-205,218,220-222
+  s_1d821ac3bcee1b::t_0bb1d99b3ff2e2 16-33,36-40,42-45,48,50-69,71-84,86-110,113-182,186-203,206-217,219
+  s_1d821ac3bcee1b::t_c019cdc5d810e0 223-225
+miniprogram/subpackages/distributor/withdrawal/withdrawal.wxml
+  s_1d821ac3bcee1b::t_2ae373b9a59943 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7d3f0ed90ff5e1e42d28a4c1361916801cc8ca99",
+  "prompts": {},
+  "sessions": {
+    "s_1d821ac3bcee1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14802-7154-7fd1-a067-ea11e09f67e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LewishStart <lewishstart@163.com>"
+    }
+  }
+}
