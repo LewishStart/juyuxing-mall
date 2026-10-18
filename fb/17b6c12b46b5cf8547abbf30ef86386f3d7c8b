@@ -1,0 +1,19 @@
+docs/项目交付说明-2026-10-18.md
+  s_1d821ac3bcee1b::t_8984bd36ee3f8e 3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51,53,55-88,90,92-96,101,107,122,137-161,163-174,176-187,189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb17b6c12b46b5cf8547abbf30ef86386f3d7c8b",
+  "prompts": {},
+  "sessions": {
+    "s_1d821ac3bcee1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14802-7154-7fd1-a067-ea11e09f67e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LewishStart <lewishstart@163.com>"
+    }
+  }
+}
