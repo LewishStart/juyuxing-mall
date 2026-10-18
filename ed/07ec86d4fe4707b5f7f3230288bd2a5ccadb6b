@@ -1,0 +1,90 @@
+scripts/prelaunch-remediation-test.js
+  s_1d821ac3bcee1b::t_1cb121fa775a38 82
+  s_1d821ac3bcee1b::t_47fa45455b1a7f 84-96
+  s_1d821ac3bcee1b::t_2296d6e759a7a6 40-41,44-64,97-106,139,147-148,151,166
+  s_1d821ac3bcee1b::t_2f05f724454e8b 1-6,8,33-39,42-43,65-76,123-138,140-142,144,149-150,153-155,159-165
+  s_1d821ac3bcee1b::t_cfe60be7082204 7,9-32,77-81,83,143,145-146,152,156-158
+  s_1d821ac3bcee1b::t_81c8b636ba487a 107-122
+scripts/e2e-mock.js
+  s_1d821ac3bcee1b::t_0e98ca0db15471 153-154
+  s_1d821ac3bcee1b::t_3eb47bcf3fa0c9 591-592,649-651
+  s_1d821ac3bcee1b::t_8e119c6e454d30 7,17,183-186,244-247,249-252,254-266,315,318-332,337,382-386,520-521,526-527,533-534,593,673
+  s_1d821ac3bcee1b::t_4c07fc26a48649 248
+  s_1d821ac3bcee1b::t_47fa45455b1a7f 46
+  s_1d821ac3bcee1b::t_bd0258e26307fa 54-63,65-77,79-81
+scripts/prelaunch-remediation-cases/A.js
+  s_1d821ac3bcee1b::t_70d89add0a39b0 1-9,11,16-40,42-119,121-161,163-181,215
+  s_1d821ac3bcee1b::t_3eb47bcf3fa0c9 10,12-15,41,120,162,182-214
+scripts/prelaunch-remediation-cases/B.js
+  s_1d821ac3bcee1b::t_f0f9440c3e503e 1-77
+scripts/commission-policy-test.js
+  s_1d821ac3bcee1b::t_e786695d719103 4,7-40
+scripts/payment-diagnostics-test.js
+  s_1d821ac3bcee1b::t_d3ff0c50ed00d0 125,159
+  s_1d821ac3bcee1b::t_eae4762686fca0 124,158
+  s_1d821ac3bcee1b::t_cd762db2fadbf8 59-64,72-80,87-89,93-95,102-106
+  s_1d821ac3bcee1b::t_e2d2ac0b4512f1 96,98,107-109
+scripts/prelaunch-remediation-cases/H.js
+  s_1d821ac3bcee1b::t_c0b69ddbb4dbf6 1-292
+scripts/prelaunch-remediation-cases/E.js
+  s_1d821ac3bcee1b::t_3eb47bcf3fa0c9 32,109
+  s_1d821ac3bcee1b::t_8d19025fdf222a 1-12,14-31,33-108,110-150
+  s_1d821ac3bcee1b::t_0a19fdbcb4d721 13
+scripts/refund-consistency-test.js
+  s_1d821ac3bcee1b::t_6a7c7905fb2fc7 16
+  s_1d821ac3bcee1b::t_95a47a31c697c4 20
+scripts/prelaunch-remediation-cases/C.js
+  s_1d821ac3bcee1b::t_9b99b26cde340c 1-169
+scripts/smoke-test.js
+  s_1d821ac3bcee1b::t_0e98ca0db15471 312-313,318-319,356-362,446-449,452
+  s_1d821ac3bcee1b::t_beaab06466c691 363
+  s_1d821ac3bcee1b::t_8e119c6e454d30 228-229,231,326-327,341,347-353
+  s_1d821ac3bcee1b::t_55f973a246f13f 354-355
+.gitignore
+  s_1d821ac3bcee1b::t_42de2bc5d7ee65 22-23
+scripts/prelaunch-remediation-cases/G.js
+  s_1d821ac3bcee1b::t_107522dca6880c 395-478
+  s_1d821ac3bcee1b::t_be3c1867fa0fe2 1-394,479
+scripts/lib/prelaunch-remediation-fixture.js
+  s_1d821ac3bcee1b::t_cfe60be7082204 98-102
+  s_1d821ac3bcee1b::t_47fa45455b1a7f 31,33-37,39-54
+  s_1d821ac3bcee1b::t_0e98ca0db15471 147-149
+  s_1d821ac3bcee1b::t_9d882145ccaa90 1-30,32,38,55-97,103-146,150-168
+docs/项目交付说明-2026-10-18.md
+  s_1d821ac3bcee1b::t_a0000481b54aee 1-19,21-47,49-72,74-164
+  s_1d821ac3bcee1b::t_f9310f803d1ccd 73
+  s_1d821ac3bcee1b::t_bf890f7436f202 20
+  s_1d821ac3bcee1b::t_b41c28541ba418 48
+scripts/prelaunch-remediation-cases/D.js
+  s_1d821ac3bcee1b::t_8f04e8e592ede6 1-229
+README.md
+  s_1d821ac3bcee1b::t_9cae1261409f5b 60
+  s_1d821ac3bcee1b::t_c88aba0268659e 59
+scripts/refund-diagnostics-test.js
+  s_1d821ac3bcee1b::t_95a47a31c697c4 20
+package.json
+  s_1d821ac3bcee1b::t_c524f1dd2a8b2a 10-11
+scripts/prelaunch-remediation-cases/F.js
+  s_1d821ac3bcee1b::t_3eb47bcf3fa0c9 12-21,77-87
+  s_1d821ac3bcee1b::t_e8158922e3ca28 1-11,22-76,88
+DEPLOY.md
+  s_1d821ac3bcee1b::t_9cae1261409f5b 48
+docs/ABC-DEPLOYMENT.md
+  s_1d821ac3bcee1b::t_70d89add0a39b0 123-127,133,205-216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed07ec86d4fe4707b5f7f3230288bd2a5ccadb6b",
+  "prompts": {},
+  "sessions": {
+    "s_1d821ac3bcee1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a14802-7154-7fd1-a067-ea11e09f67e3",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LewishStart <lewishstart@163.com>"
+    }
+  }
+}
