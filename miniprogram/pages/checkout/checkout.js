@@ -23,6 +23,7 @@ Page({
   },
 
   onLoad(options) {
+    this._recoveryPromise = this.recoverPendingSubmission(options);
     if (options.fromCart === '1') {
       // 优先从临时 storage 读取（避免 URL 超长），兼容旧版 URL 传参
       let items = wx.getStorageSync('checkoutItems') || [];
@@ -64,63 +65,65 @@ Page({
   resolveSpecPrice(p, specName) {
     const specs = (p && p.specs) || [];
     const spec = specName ? specs.find(s => s && s.name === specName) : null;
-    return Number(spec && spec.price) || Number(p.price) || 0;
+    const rawPrice = spec && spec.price !== undefined ? spec.price : p.price;
+    const price = Number(rawPrice);
+    if (!['number', 'string'].includes(typeof rawPrice) || String(rawPrice).trim() === '' ||
+        !Number.isSafeInteger(price) || price <= 0) return 0;
+    return price;
+  },
+
+  resolvePurchaseItem(product, quantity, specName) {
+    if (!product || (product.status && product.status !== 'on')) return null;
+    const specs = Array.isArray(product.specs) ? product.specs : [];
+    const selected = specName ? specs.find(spec => spec.name === specName) : specs[0];
+    if (specs.length && !selected) return null;
+    // product API has already projected available stock. Do not subtract reservations again.
+    const rootAvailable = Number(product.stock);
+    const available = selected ? Math.min(Number(selected.stock), rootAvailable) : rootAvailable;
+    if (!Number.isSafeInteger(available) || available <= 0) return null;
+    const requested = Number(quantity);
+    if (!Number.isSafeInteger(requested) || requested <= 0) return null;
+    const price = this.resolveSpecPrice(product, selected && selected.name);
+    if (!Number.isSafeInteger(price) || price <= 0) return null;
+    return { productId: product._id, name: product.name,
+      spec: selected ? selected.name : '', price,
+      quantity: Math.min(requested, available), image: (product.images && product.images[0]) || '' };
   },
 
   async fetchProductDetail(productId, quantity, specName) {
     const res = await API.getProduct(productId);
-    if (!res || !res.success || !res.data) {
-      this.setData({ loading: false, loadError: '商品不存在或已下架' });
+    const item = res && res.success && this.resolvePurchaseItem(res.data, quantity, specName);
+    if (!item) {
+      this.setData({ items: [], loading: false, loadError: '商品已下架、价格或规格无效、库存不足' });
       return;
     }
-    const p = res.data;
-    const item = {
-      productId: p._id,
-      name: p.name,
-      spec: specName || (p.specs && p.specs[0] && p.specs[0].name) || '',
-      price: this.resolveSpecPrice(p, specName),
-      quantity: quantity,
-      image: (p.images && p.images[0]) || ''
-    };
-    this.setData({ items: decorateList([item]), loading: false });
+    if (item.quantity !== quantity) toast('库存不足，数量已调整，请核对后提交');
+    this.setData({ items: decorateList([item]), loading: false, loadError: '' });
     this.calcTotal();
     this.loadAvailableCoupons();
   },
 
   async fetchItemsDetail(items) {
-    // 校验每个商品最新价格/库存/上下架
     const fixed = [];
     let changed = false;
-    for (const it of items) {
+    for (const item of items) {
       try {
-        const res = await API.getProduct(it.productId);
-        if (res && res.success && res.data) {
-          const p = res.data;
-          if (p.status && p.status !== 'on') {
-            changed = true;
-            continue;
-          }
-          fixed.push({
-            productId: p._id,
-            name: p.name,
-            spec: it.spec || (p.specs && p.specs[0] && p.specs[0].name) || '',
-            price: this.resolveSpecPrice(p, it.spec),
-            quantity: Math.min(Number(it.quantity) || 1, (p.specs && p.specs[0] && p.specs[0].stock) || 9999),
-            image: (p.images && p.images[0]) || ''
-          });
-        } else {
-          changed = true;
-        }
-      } catch (e) {
-        fixed.push(it);
+        const res = await API.getProduct(item.productId);
+        const current = res && res.success && this.resolvePurchaseItem(res.data, Number(item.quantity), item.spec);
+        if (!current) { changed = true; continue; }
+        if (current.quantity !== Number(item.quantity)) changed = true;
+        fixed.push(current);
+      } catch (error) {
+        this.setData({ items: [], loading: false, loadError: '商品库存核对失败，请重试' });
+        return;
       }
     }
-    if (fixed.length === 0) {
-      this.setData({ loading: false, loadError: '所选商品已下架' });
+    if (!fixed.length) {
+      this.setData({ items: [], loading: false, loadError: '所选商品价格异常、已下架或库存不足' });
       return;
     }
-    if (changed) toast('部分商品已下架，已自动剔除');
-    this.setData({ items: decorateList(fixed), loading: false });
+    if (changed) toast('商品或数量已因库存变化调整，请核对后提交');
+    this.setData({ items: decorateList(fixed), loading: false, loadError: '' });
     this.calcTotal();
     this.loadAvailableCoupons();
   },
@@ -215,6 +218,8 @@ Page({
   },
 
   async submitOrder() {
+    if (this._recoveryPromise) await this._recoveryPromise;
+    if (this._recoveredOrderId) return;
     if (this.data.submitting) return;
     if (!this.data.address) { toast('请选择收货地址'); return; }
     const items = this.data.items || [];
@@ -222,7 +227,6 @@ Page({
 
     this.setData({ submitting: true });
     const orderData = {
-      orderNo: generateOrderNo(),
       items: items.map(it => ({
         productId: it.productId,
         name: it.name,
@@ -240,22 +244,71 @@ Page({
       couponDiscount: this.data.discountAmount,
       fullReductionDiscount: this.data.fullReduction
     };
-    const res = await API.createOrder(orderData);
-    if (res && res.success && res.orderId) {
-      if (this.data.fromCart) {
-        // 清理临时结算数据（云端购物车由 order 云函数按 removeCartKeys 精确清理）
-        try { wx.removeStorageSync('checkoutItems'); } catch (e) {}
+    try {
+      const actor = String(wx.getStorageSync('openId') || '');
+      if (!actor) throw new Error('请先登录再提交订单');
+      const storageKey = 'checkoutPending:' + actor;
+      const stored = wx.getStorageSync(storageKey);
+      const pending = stored && Array.isArray(stored.entries) ? stored.entries.slice() : [];
+      const fingerprint = JSON.stringify({items:orderData.items.map(item=>({productId:item.productId,spec:item.spec||'',quantity:item.quantity})),address:{name:orderData.address.name,phone:orderData.address.phone,region:orderData.address.region,detail:orderData.address.detail},remark:orderData.remark||'',couponId:orderData.couponId});
+      let intent = pending.find(entry => entry.fingerprint === fingerprint && entry.actor === actor);
+      if (!intent) {
+        const orderNo = generateOrderNo();
+        intent = { actor, fingerprint, requestId: orderNo, orderNo, orderData };
+        pending.push(intent);
       }
-      toast('下单成功', 'success');
-      setTimeout(() => {
-        wx.redirectTo({
-          url: '/pages/order-detail/order-detail?id=' + res.orderId,
-          fail: () => wx.navigateTo({ url: '/pages/order/order' })
-        });
-      }, 600);
-    } else {
-      toast((res && res.error) || '下单失败');
+      // Persist before sending. Storage failure must not create an untracked order.
+      wx.setStorageSync(storageKey, { entries: pending });
+      const res = await API.createOrder({ ...(intent.orderData || orderData), orderNo: intent.orderNo, requestId: intent.requestId });
+      if (res && res.success && res.orderId) {
+        const latest = wx.getStorageSync(storageKey);
+        const entries = latest && Array.isArray(latest.entries) ? latest.entries : pending;
+        wx.setStorageSync(storageKey, { entries: entries.filter(entry => entry.requestId !== intent.requestId) });
+        if (this.data.fromCart) { try { wx.removeStorageSync('checkoutItems'); } catch (e) {} }
+        toast('下单成功', 'success');
+        setTimeout(() => wx.redirectTo({url:'/pages/order-detail/order-detail?id='+res.orderId,fail:()=>wx.navigateTo({url:'/pages/order/order'})}),600);
+      } else {
+        this.retireRejectedIntent(storageKey,actor,intent,res);
+        toast((res && res.error) || '提交结果待核对，请沿原提交重试');
+        this.setData({ submitting: false });
+      }
+    } catch (error) {
+      toast(error && error.message || '提交结果待核对，请重试');
       this.setData({ submitting: false });
     }
+  },
+
+  retireRejectedIntent(storageKey,actor,intent,result) {
+    if(!result || result.success!==false || result.code!=='CREATE_REJECTED' || result.creationOutcome!=='rejected' || result.creationOutcomeVersion!==1 || result.requestId!==intent.requestId || result.orderNo!==intent.orderNo)return false;
+    const latest=wx.getStorageSync(storageKey);
+    if(latest&&Array.isArray(latest.entries))wx.setStorageSync(storageKey,{entries:latest.entries.filter(entry=>!(entry.actor===actor&&entry.requestId===intent.requestId&&entry.orderNo===intent.orderNo&&entry.fingerprint===intent.fingerprint))});
+    return true;
+  },
+
+  async recoverPendingSubmission(options = {}) {
+    try {
+      const actor=String(wx.getStorageSync('openId')||'');
+      const stored=wx.getStorageSync('checkoutPending:'+actor);
+      if(!actor||!stored||!Array.isArray(stored.entries))return;
+      for(const intent of stored.entries) {
+        if(intent.actor!==actor)continue;
+        if(options.productId && (!intent.orderData || intent.orderData.items.length!==1 || intent.orderData.items[0].productId!==options.productId || options.specName && String(intent.orderData.items[0].spec||'')!==String(options.specName) || Number(intent.orderData.items[0].quantity)!==(Number(options.quantity)||1)))continue;
+        if(options.fromCart==='1') {
+          let basket=wx.getStorageSync('checkoutItems');
+          if(!Array.isArray(basket)&&options.items)try{basket=JSON.parse(decodeURIComponent(options.items));}catch(error){basket=[];}
+          const key=items=>JSON.stringify((items||[]).map(item=>({productId:item.productId,spec:item.spec||'',quantity:Number(item.quantity)})).sort((a,b)=>(a.productId+'_'+a.spec).localeCompare(b.productId+'_'+b.spec)));
+          if(!Array.isArray(basket)||!intent.orderData||key(basket)!==key(intent.orderData.items))continue;
+        }
+        const res=await API.recoverOrderCreate(intent.requestId,{silent:true});
+        if(this.retireRejectedIntent('checkoutPending:'+actor,actor,intent,res))continue;
+        if(!res||!res.success||!res.orderId)continue;
+        this._recoveredOrderId=res.orderId;
+        const latest=wx.getStorageSync('checkoutPending:'+actor);
+        if(latest&&Array.isArray(latest.entries))wx.setStorageSync('checkoutPending:'+actor,{entries:latest.entries.filter(entry=>entry.requestId!==intent.requestId)});
+        wx.redirectTo({url:'/pages/order-detail/order-detail?id='+res.orderId});
+        return;
+      }
+    } catch(error) { /* preserve unresolved intent for the next explicit retry */ }
+
   }
 });

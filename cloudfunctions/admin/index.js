@@ -2,7 +2,7 @@
 
 const cloud = require('wx-server-sdk');
 const { queryRefundStatus } = require('./refund-query');
-const { applyRefundEffects } = require('./refund-effects');
+const { applyRefundEffects, planRestock } = require('./refund-effects');
 const { createRefundExecutor } = require('./refund-execution');
 const paymentDiagnostics = require('./payment-diagnostics');
 const { loadPayApiConfig, directOrderQuery, directRefund } = require('./wxpay-direct');
@@ -129,36 +129,32 @@ function verifyAccountPassword(password, stored) {
   return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(stored));
 }
 
-async function ensureLegacyOwner(username, password, configData) {
-  const existing = await db.collection('admin_accounts').where({ username }).limit(1).get().catch(() => ({ data: [] }));
-  if (existing.data && existing.data[0]) return existing.data[0];
-  if (username !== 'owner' || !configData.password || !verifyPassword(password, configData.password)) return null;
-  const passwordHash = createPasswordHash(password);
-  const result = await db.collection('admin_accounts').add({
-    data: {
-      username: 'owner', displayName: '店主', role: 'owner', status: 'active',
-      passwordHash, mustChangePassword: false,
-      migratedFromLegacy: true, createTime: db.serverDate(), updateTime: db.serverDate()
-    }
-  });
-  return { _id: result._id, username: 'owner', displayName: '店主', role: 'owner', status: 'active', passwordHash };
-}
-
-async function authenticate(openId, adminToken, configData) {
-  const adminOpenIds = configData.adminOpenIds || [];
-  const legacyOpenId = configData.openId || '';
-  if (openId && (openId === legacyOpenId || adminOpenIds.includes(openId))) {
-    return { accountId: 'legacy-openid:' + openId, username: 'mini-admin', displayName: '小程序管理员', role: 'owner' };
+// Runtime authentication never migrates or grants authority from legacy config.
+async function authenticate(openId, adminToken) {
+  if (openId) {
+    const result = await db.collection('admin_accounts')
+      .where({ wechatOpenId: openId, status: 'active' }).limit(1).get();
+    const account = result.data && result.data[0];
+    if (account && ROLE_PERMISSIONS[account.role]) return accountActor(account);
   }
   if (!adminToken) return null;
   const sessionRes = await db.collection('admin_sessions')
-    .where({ tokenHash: hashToken(adminToken), status: 'active' }).limit(1).get().catch(() => ({ data: [] }));
+    .where({ tokenHash: hashToken(adminToken), status: 'active' }).limit(1).get();
   const session = sessionRes.data && sessionRes.data[0];
-  if (!session || !session.expiresAt || new Date(session.expiresAt) <= new Date()) return null;
-  const accountRes = await db.collection('admin_accounts').doc(session.accountId).get().catch(() => null);
+  const expiry = session && new Date(session.expiresAt).getTime();
+  if (!session || !Number.isFinite(expiry) || expiry <= Date.now()) return null;
+  const accountRes = await db.collection('admin_accounts').doc(session.accountId).get();
   const account = accountRes && accountRes.data;
-  if (!account || account.status !== 'active') return null;
-  return { accountId: account._id, username: account.username, displayName: account.displayName || account.username, role: account.role };
+  if (!account || account.status !== 'active' || !ROLE_PERMISSIONS[account.role]) return null;
+  // Old QR sessions without a binding snapshot must log in again; password sessions retain their contract.
+  if (session.source === 'wechat_qr' && (!account.wechatOpenId ||
+      session.wechatOpenIdHash !== hashToken(account.wechatOpenId))) return null;
+  return accountActor(account);
+}
+
+function accountActor(account) {
+  return { accountId: account._id, username: account.username,
+    displayName: account.displayName || account.username, role: account.role };
 }
 
 async function generateReferralCode() {
@@ -170,6 +166,21 @@ async function generateReferralCode() {
     if (exists.total === 0) return code;
   }
   throw new Error('推广码生成失败');
+}
+
+function resolveRefundMerchant(refund, order) {
+  const refundMerchant = String(refund.subMchId || '').trim();
+  const paymentMerchant = String(order.paymentSubMchId || '').trim();
+  if (refundMerchant && paymentMerchant && refundMerchant !== paymentMerchant) {
+    return { success: false, code: 'REFUND_MERCHANT_MISMATCH',
+      error: '\u9000\u6b3e\u5355\u4e0e\u539f\u652f\u4ed8\u5546\u6237\u4e0d\u4e00\u81f4\uff0c\u8bf7\u6309\u539f\u5355\u6838\u5bf9' };
+  }
+  const subMchId = refundMerchant || paymentMerchant;
+  if (!subMchId) {
+    return { success: false, code: 'REFUND_MERCHANT_UNVERIFIED',
+      error: '\u7f3a\u5c11\u5df2\u6838\u5b9e\u7684\u539f\u652f\u4ed8\u5546\u6237\uff0c\u5df2\u963b\u6b62\u81ea\u52a8\u9000\u6b3e\uff1b\u8bf7\u5148\u6838\u5bf9\u539f\u5355' };
+  }
+  return { success: true, subMchId };
 }
 
 function createOutRefundNo(refundId) {
@@ -192,18 +203,44 @@ function verifyPassword(inputPwd, storedPwd) {
   }
 }
 
+function integerValue(value, label, minimum = 0) {
+  const number = Number(value);
+  if (!['number', 'string'].includes(typeof value) || value === '' || !Number.isSafeInteger(number) || number < minimum) {
+    throw new Error(label + ' must be a safe integer');
+  }
+  return number;
+}
+
 function normalizeSpecs(specs, fallbackStock, existingSpecs) {
   const existing = Array.isArray(existingSpecs) ? existingSpecs : [];
   const source = Array.isArray(specs) && specs.length ? specs : [{ name: '默认规格', stock: fallbackStock }];
+  const names = new Set();
   return source.map(spec => {
-    const old = existing.find(item => item.name === spec.name) || {};
-    return {
-      ...spec,
-      name: String(spec.name || '默认规格').trim(),
-      stock: Math.max(0, Number(spec.stock) || 0),
-      reservedStock: Math.max(0, Number(old.reservedStock) || Number(spec.reservedStock) || 0)
-    };
+    const name = String(spec.name || '').trim();
+    if (!name || names.has(name)) throw new Error('SKU names must be nonempty and unique');
+    names.add(name);
+    const old = existing.find(item => item.name === name) || {};
+    const result = { ...old, ...spec, name, stock: integerValue(spec.stock, 'SKU stock'),
+      reservedStock: Number(old.reservedStock) || 0 };
+    if (result.stock < result.reservedStock) throw new Error('SKU stock below reservation');
+    if (result.price !== undefined) result.price = integerValue(result.price, 'SKU price', 1);
+    return result;
   });
+}
+
+function sumStock(specs) {
+  const total = specs.reduce((sum, spec) => sum + integerValue(spec.stock, 'SKU stock'), 0);
+  return integerValue(total, 'Total stock');
+}
+
+async function protectReferencedSpecs(transaction, product, nextSpecs) {
+  const missing = (product.specs || []).filter(old => !nextSpecs.some(spec => spec.name === old.name));
+  if (!missing.length) return;
+  if (missing.some(spec => Number(spec.reservedStock) > 0)) throw new Error('Reserved SKU cannot be removed or renamed');
+  const references = await transaction.collection('orders').where({
+    items: _.elemMatch({ productId: product._id, spec: _.in(missing.map(spec => spec.name)) })
+  }).count();
+  if (references.total > 0) throw new Error('Ordered SKU cannot be removed or renamed; take it off sale instead');
 }
 
 const TRANSACTION_COLLECTIONS = [
@@ -219,18 +256,28 @@ async function listAllDocuments(collectionName, max = 5000) {
   return listQueryDocuments(collectionName, {}, max);
 }
 
+function financialAmount(value) {
+  if (!Number.isSafeInteger(value)) throw new Error('账务金额无效，请核对原单');
+  return value;
+}
+function financialSum(rows) {
+  return rows.reduce((sum, row) => financialAmount(sum + financialAmount(row.amount)), 0);
+}
 async function listQueryDocuments(collectionName, query, max = 5000) {
-  const pageSize = 100;
   const data = [];
-  for (let offset = 0; offset < max; offset += pageSize) {
-    const res = await db.collection(collectionName).where(query).skip(offset).limit(pageSize).get()
-      .catch(() => ({ data: [] }));
-    const page = res.data || [];
-    data.push(...page);
-    if (page.length < pageSize) break;
+  let cursor = '';
+  for (;;) {
+    const filter = cursor ? { ...query, _id: _.gt(cursor) } : query;
+    const res = await db.collection(collectionName).where(filter).orderBy('_id', 'asc').limit(100).get();
+    if (!res || !Array.isArray(res.data)) throw new Error(`${collectionName} query returned invalid data`);
+    for (const row of res.data) {
+      if (typeof row._id !== 'string' || !row._id || row._id <= cursor) throw new Error(`${collectionName} pagination incomplete`);
+      cursor = row._id;
+      data.push(row);
+    }
+    if (data.length >= max) throw new Error(`${collectionName} 数据量超过安全读取上限 ${max}`);
+    if (res.data.length < 100) return data;
   }
-  if (data.length >= max) throw new Error(`${collectionName} 数据量超过安全清理上限 ${max}`);
-  return data;
 }
 
 async function buildTransactionCleanupSnapshot() {
@@ -311,7 +358,6 @@ exports.main = async (event, context) => {
     const configData = (loginRes && loginRes.data) || {};
     let accountRes = await db.collection('admin_accounts').where({ username }).limit(1).get().catch(() => ({ data: [] }));
     let account = accountRes.data && accountRes.data[0];
-    if (!account) account = await ensureLegacyOwner(username, password, configData);
     if (!account || account.status !== 'active' || !verifyAccountPassword(password, account.passwordHash)) {
       return { success: false, error: '账号或密码错误' };
     }
@@ -450,24 +496,24 @@ exports.main = async (event, context) => {
         const time = item.createTime ? new Date(item.createTime) : null;
         return time && time >= startTime && time <= endTime;
       })) {
-        const amount = Number(entry.amount) || 0;
-        if (entry.type === 'sale_receipt') receipts += amount;
-        if (entry.type === 'refund') refunds += amount;
-        if (entry.type === 'commission_payout') commissionPaid += amount;
+        const amount = financialAmount(entry.amount);
+        if (entry.type === 'sale_receipt') receipts = financialAmount(receipts + amount);
+        if (entry.type === 'refund') refunds = financialAmount(refunds + amount);
+        if (entry.type === 'commission_payout') commissionPaid = financialAmount(commissionPaid + amount);
         const day = entry.createTime ? new Date(entry.createTime).toISOString().slice(0, 10) : 'unknown';
         if (!byDay[day]) byDay[day] = { date: day, receipts: 0, refunds: 0, commissionPaid: 0, net: 0 };
-        if (entry.type === 'sale_receipt') byDay[day].receipts += amount;
-        if (entry.type === 'refund') byDay[day].refunds += amount;
-        if (entry.type === 'commission_payout') byDay[day].commissionPaid += amount;
-        byDay[day].net += entry.direction === 'out' ? -amount : amount;
+        if (entry.type === 'sale_receipt') byDay[day].receipts = financialAmount(byDay[day].receipts + amount);
+        if (entry.type === 'refund') byDay[day].refunds = financialAmount(byDay[day].refunds + amount);
+        if (entry.type === 'commission_payout') byDay[day].commissionPaid = financialAmount(byDay[day].commissionPaid + amount);
+        byDay[day].net = financialAmount(byDay[day].net + (entry.direction === 'out' ? -amount : amount));
       }
       const commissions = await listQueryDocuments('commissions', { status: _.in(['frozen', 'settled', 'withdrawing']) });
-      const frozenLiability = commissions.filter(item => item.status === 'frozen').reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-      const payableLiability = commissions.filter(item => ['settled', 'withdrawing'].includes(item.status)).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      const frozenLiability = financialSum(commissions.filter(item => item.status === 'frozen'));
+      const payableLiability = financialSum(commissions.filter(item => ['settled', 'withdrawing'].includes(item.status)));
       return {
         success: true,
         data: {
-          receipts, refunds, commissionPaid, netCashflow: receipts - refunds - commissionPaid,
+          receipts, refunds, commissionPaid, netCashflow: financialAmount(financialAmount(receipts - refunds) - commissionPaid),
           frozenLiability, payableLiability,
           daily: Object.values(byDay).sort((a, b) => a.date.localeCompare(b.date))
         }
@@ -490,28 +536,46 @@ exports.main = async (event, context) => {
     }
 
     case 'adjustInventory': {
-      const quantity = Number(event.quantity);
-      if (!event.productId || !Number.isInteger(quantity) || quantity === 0) return { success: false, error: '库存调整参数无效' };
-      if (!String(event.reason || '').trim()) return { success: false, error: '请填写调整原因' };
-      const productRes = await db.collection('products').doc(event.productId).get().catch(() => null);
-      const product = productRes && productRes.data;
-      if (!product) return { success: false, error: '商品不存在' };
-      const specs = Array.isArray(product.specs) ? product.specs.map(spec => ({ ...spec })) : [];
-      if (event.spec) {
-        const index = specs.findIndex(spec => spec.name === event.spec);
-        if (index < 0) return { success: false, error: '规格不存在' };
-        if ((Number(specs[index].stock) || 0) + quantity < (Number(specs[index].reservedStock) || 0)) return { success: false, error: '调整后库存不能低于锁定库存' };
-        specs[index].stock = (Number(specs[index].stock) || 0) + quantity;
+      if (typeof db.runTransaction !== 'function') return { success: false, error: 'Inventory adjustments require transactions' };
+      const quantity = integerValue(event.quantity, 'Adjustment magnitude', -Number.MAX_SAFE_INTEGER);
+      const reason = String(event.reason || '').trim();
+      const requestId = String(event.requestId || '').trim();
+      if (!event.productId || !quantity || !reason || !/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) {
+        return { success: false, error: 'Product, quantity, reason and stable operation key are required' };
       }
-      const nextStock = (Number(product.stock) || 0) + quantity;
-      if (nextStock < (Number(product.reservedStock) || 0)) return { success: false, error: '调整后库存不能低于锁定库存' };
-      await db.collection('products').doc(product._id).update({ data: { stock: nextStock, specs, updateTime: db.serverDate() } });
-      await db.collection('inventory_adjustments').add({ data: {
-        productId: product._id, productName: product.name, spec: event.spec || '', quantity,
-        beforeStock: Number(product.stock) || 0, afterStock: nextStock,
-        reason: String(event.reason).trim(), operatorId: actor.accountId, createTime: db.serverDate()
-      } });
-      return { success: true, stock: nextStock };
+      const payload = JSON.stringify([event.productId, String(event.spec || ''), quantity, reason]);
+      const operationId = 'manual_' + hashToken(requestId).slice(0, 24);
+      return await db.runTransaction(async transaction => {
+        const prior = await transaction.collection('inventory_adjustments').where({ _id: operationId }).get();
+        if (prior.data && prior.data[0]) {
+          const record = prior.data[0];
+          if (record.requestId !== requestId || record.operatorId !== actor.accountId || record.operationPayload !== payload) {
+            return { success: false, error: 'Operation key conflicts with another actor or payload', code: 'IDEMPOTENCY_CONFLICT' };
+          }
+          return { success: true, alreadyProcessed: true, stock: record.afterStock };
+        }
+        const product = (await transaction.collection('products').doc(event.productId).get()).data;
+        if (!product) throw new Error('Product not found');
+        const specs = (product.specs || []).map(spec => ({ ...spec }));
+        const selected = event.spec || (specs.length === 1 ? specs[0].name : '');
+        if (specs.length > 1 && !selected) throw new Error('Choose a SKU for multi-SKU inventory');
+        if (specs.length) {
+          const spec = specs.find(item => item.name === selected);
+          if (!spec) throw new Error('SKU not found');
+          spec.stock = integerValue((Number(spec.stock) || 0) + quantity, 'SKU stock');
+          if (spec.stock < (Number(spec.reservedStock) || 0)) throw new Error('SKU stock below reservation');
+        }
+        const nextStock = specs.length ? sumStock(specs) : integerValue((Number(product.stock) || 0) + quantity, 'Stock');
+        if (nextStock < (Number(product.reservedStock) || 0)) throw new Error('Stock below reservation');
+        await transaction.collection('products').doc(product._id).update({ data: { stock: nextStock, specs, updateTime: db.serverDate() } });
+        await transaction.collection('inventory_adjustments').add({ data: {
+          _id: operationId, requestId, operationPayload: payload,
+          productId: product._id, productName: product.name, spec: selected, quantity,
+          beforeStock: Number(product.stock) || 0, afterStock: nextStock, reason,
+          operatorId: actor.accountId, createTime: db.serverDate()
+        } });
+        return { success: true, stock: nextStock };
+      });
     }
 
     case 'migrationPreview': {
@@ -708,10 +772,13 @@ exports.main = async (event, context) => {
       if (!order) {
         return { success: false, error: '订单不存在' };
       }
+      if (order.paymentResolutionRequired === true) {
+        return { success: false, code: 'PAYMENT_RESOLUTION_REQUIRED', error: '库存已释放后确认收款，禁止发货；请按原订单申请仅退款' };
+      }
       if (order.status !== 'paid') {
         return { success: false, error: '只有已支付订单可以发货' };
       }
-      const updateRes = await db.collection('orders').where({ _id: orderId, status: 'paid' }).update({
+      const updateRes = await db.collection('orders').where({ _id: orderId, status: 'paid', paymentResolutionRequired: _.neq(true) }).update({
         data: {
           status: 'shipped',
           // 历史订单 logistics 为 null：嵌套对象更新会报 Cannot create field in element null，
@@ -801,6 +868,8 @@ exports.main = async (event, context) => {
       if (statusFilter === 'pending') {
         // 未完成退款始终保留在待处理列表。
         query.status = _.in(['pending', 'pending_auto', 'processing', 'channel_processing', 'manual_review']);
+      } else if (statusFilter === 'inventory_pending') {
+        query = { status: 'approved', inventoryRestockStatus: 'pending_exception' };
       } else if (statusFilter !== 'all') {
         query.status = statusFilter;
       }
@@ -867,12 +936,10 @@ exports.main = async (event, context) => {
         };
       }
 
-      let subMchId = '';
-      if (!isMockPayment) {
-        const payConfig = await db.collection('pay_config').doc('default').get();
-        subMchId = String((payConfig.data && payConfig.data.subMchId) || '').trim();
-        if (!subMchId) return { success: false, error: '微信支付商户号未配置，无法发起退款' };
-      }
+      // Bind approval to the original payment, never the current shop config.
+      const merchant = isMockPayment ? { success: true, subMchId: '' } : resolveRefundMerchant(rf, order);
+      if (!merchant.success) return merchant;
+      const subMchId = merchant.subMchId;
       // Approval, rejection and mock completion compete within the same transaction.
       const approvalResult = await db.runTransaction(async transaction => {
         const latestRefund = (await transaction.collection('refunds').doc(refundId).get()).data;
@@ -885,9 +952,21 @@ exports.main = async (event, context) => {
             latestOrder.totalFee !== order.totalFee || latestOrder.transactionId !== order.transactionId) {
           return { success: false, error: '订单状态已变化，请重新核对' };
         }
+        if (!isMockPayment) {
+          const latestMerchant = resolveRefundMerchant(latestRefund, latestOrder);
+          if (!latestMerchant.success) return latestMerchant;
+          if (latestMerchant.subMchId !== subMchId) return { success: false, code: 'REFUND_MERCHANT_CHANGED',
+            error: '原支付商户已变化，请刷新后核对' };
+        }
         if (!Number.isSafeInteger(latestOrder.totalFee) || latestOrder.totalFee <= 0) {
           return { success: false, error: '订单金额无效' };
         }
+        // Mock completion performs preflight reads plus the effects' stock read/write/journal.
+        const restockProducts = new Set((latestOrder.items || []).map(item => item.productId)).size;
+        if (isMockPayment && 12 + restockProducts * 4 > 90) return { success: false, code: 'REFUND_TRANSACTION_CAPACITY',
+          error: '退款商品数量超过安全事务容量，请核对原单' };
+        const stockPlan = await planRestock(transaction, latestOrder, shouldRestock);
+        if (stockPlan.status === 'pending_exception') return { success: false, error: stockPlan.error, code: 'RESTOCK_PREFLIGHT_FAILED' };
         const data = {
           status: isMockPayment ? 'approved' : 'pending_auto',
           outRefundNo: latestRefund.outRefundNo || createOutRefundNo(refundId),
@@ -897,7 +976,8 @@ exports.main = async (event, context) => {
           processAttempts: 0, processTime: db.serverDate()
         };
         if (isMockPayment) {
-          await applyRefundEffects(transaction, db, latestOrder, latestRefund, shouldRestock);
+          const effects = await applyRefundEffects(transaction, db, latestOrder, latestRefund, shouldRestock, stockPlan.updates.length);
+          Object.assign(data, effects);
           Object.assign(data, { refundChannel: 'mock', refundTime: db.serverDate() });
         }
         await transaction.collection('refunds').doc(refundId).update({ data });
@@ -937,7 +1017,8 @@ exports.main = async (event, context) => {
       const rfRes = await db.collection('refunds').doc(refundId).get().catch(() => null);
       const rf = rfRes && rfRes.data;
       if (!rf) return { success: false, error: '退款记录不存在' };
-      if (!['manual_review', 'pending_auto', 'processing', 'channel_processing'].includes(rf.status)) {
+      if (!['manual_review', 'pending_auto', 'processing', 'channel_processing'].includes(rf.status) &&
+          !(rf.status === 'approved' && rf.inventoryRestockStatus === 'pending_exception')) {
         return { success: false, error: '当前状态（' + rf.status + '）无需重试' };
       }
       if (APP_SECRET) {
@@ -964,58 +1045,51 @@ exports.main = async (event, context) => {
 
     case 'createProduct': {
       const { name, subtitle, price, originalPrice, stock, specs, images, description, category, status } = event;
-      if (!name || !price) {
-        return { success: false, error: '商品名称和价格不能为空' };
-      }
-      const res = await db.collection('products').add({
-        data: {
-          name: name.trim(),
-          subtitle: subtitle || '',
-          price: Number(price),
-          originalPrice: Number(originalPrice) || 0,
-          stock: Math.max(0, Number(stock) || 0),
-          reservedStock: 0,
-          specs: normalizeSpecs(specs, Number(stock) || 0),
-          images: images || [],
-          description: description || '',
-          category: category || '',
-          status: status || 'on',
-          sales: 0,
-          rating: 5.0,
-          createTime: db.serverDate(),
-          updateTime: db.serverDate()
-        }
-      });
-      return { success: true, productId: res._id, message: '商品创建成功' };
+      if (!String(name || '').trim()) return { success: false, error: 'Product name required' };
+      const normalizedSpecs = normalizeSpecs(specs, stock === undefined ? 0 : stock);
+      const totalStock = sumStock(normalizedSpecs);
+      if (stock !== undefined && integerValue(stock, 'Stock') !== totalStock) throw new Error('Total stock must equal SKU stock sum');
+      const res = await db.collection('products').add({ data: {
+        name: name.trim(), subtitle: subtitle || '', price: integerValue(price, 'Price in fen', 1),
+        originalPrice: originalPrice === undefined || originalPrice === '' ? 0 : integerValue(originalPrice, 'Original price in fen'),
+        stock: totalStock, reservedStock: 0, specs: normalizedSpecs,
+        images: images || [], description: description || '', category: category || '', status: status || 'on',
+        sales: 0, rating: 5.0, createTime: db.serverDate(), updateTime: db.serverDate()
+      } });
+      return { success: true, productId: res._id, message: 'Product created' };
     }
 
     case 'updateProduct': {
-      const { id, name, subtitle, price, originalPrice, stock, specs, images, description, category, status } = event;
-      if (!id) return { success: false, error: '商品ID不能为空' };
-      const currentRes = await db.collection('products').doc(id).get().catch(() => null);
-      const current = currentRes && currentRes.data;
-      if (!current) return { success: false, error: '商品不存在' };
-      const updateData = {};
-      if (name !== undefined) updateData.name = name.trim();
-      if (subtitle !== undefined) updateData.subtitle = subtitle;
-      if (price !== undefined) updateData.price = Number(price);
-      if (originalPrice !== undefined) updateData.originalPrice = Number(originalPrice) || 0;
-      if (stock !== undefined) {
-        const nextStock = Math.max(0, Number(stock) || 0);
-        if (nextStock < (Number(current.reservedStock) || 0)) return { success: false, error: '库存不能低于锁定量' };
-        updateData.stock = nextStock;
-      }
-      if (specs !== undefined) {
-        updateData.specs = normalizeSpecs(specs, Number(stock !== undefined ? stock : current.stock) || 0, current.specs);
-        if (updateData.specs.some(spec => spec.stock < spec.reservedStock)) return { success: false, error: '规格库存不能低于锁定量' };
-      }
-      if (images !== undefined) updateData.images = images;
-      if (description !== undefined) updateData.description = description;
-      if (category !== undefined) updateData.category = category;
-      if (status !== undefined) updateData.status = status;
-      updateData.updateTime = db.serverDate();
-      await db.collection('products').doc(id).update({ data: updateData });
-      return { success: true, message: '商品更新成功' };
+      if (!event.id) return { success: false, error: 'Product ID required' };
+      if (typeof db.runTransaction !== 'function') return { success: false, error: 'Product editing requires transactions' };
+      return await db.runTransaction(async transaction => {
+        const current = (await transaction.collection('products').doc(event.id).get()).data;
+        if (!current) throw new Error('Product not found');
+        const data = { updateTime: db.serverDate() };
+        for (const key of ['name', 'subtitle', 'images', 'description', 'category', 'status']) {
+          if (event[key] !== undefined) data[key] = key === 'name' ? String(event[key]).trim() : event[key];
+        }
+        if (event.price !== undefined) data.price = integerValue(event.price, 'Price in fen', 1);
+        if (event.originalPrice !== undefined) data.originalPrice = integerValue(event.originalPrice, 'Original price in fen');
+        const hasSpecs = event.specs !== undefined;
+        let nextSpecs = hasSpecs ? normalizeSpecs(event.specs, current.stock, current.specs) : (current.specs || []).map(spec => ({ ...spec }));
+        if (hasSpecs) await protectReferencedSpecs(transaction, current, nextSpecs);
+        if (event.stock !== undefined) {
+          const next = integerValue(event.stock, 'Stock');
+          if (nextSpecs.length > 1 && !hasSpecs && next !== Number(current.stock)) throw new Error('Choose SKU inventory instead of editing total stock');
+          if (nextSpecs.length === 1 && !hasSpecs) nextSpecs[0].stock = next;
+          if (nextSpecs.length > 1 && hasSpecs && sumStock(nextSpecs) !== next) throw new Error('Total stock differs from SKU sum');
+          if (!nextSpecs.length) data.stock = next;
+        }
+        if (hasSpecs || event.stock !== undefined) {
+          if (nextSpecs.some(spec => Number(spec.stock) < (Number(spec.reservedStock) || 0))) throw new Error('SKU stock below reservation');
+          if (nextSpecs.length) data.stock = sumStock(nextSpecs);
+          if (data.stock < (Number(current.reservedStock) || 0)) throw new Error('Stock below reservation');
+          data.specs = nextSpecs;
+        }
+        await transaction.collection('products').doc(event.id).update({ data });
+        return { success: true, message: 'Product updated' };
+      });
     }
 
     case 'toggleProductStatus': {
@@ -1031,15 +1105,16 @@ exports.main = async (event, context) => {
 
     case 'deleteProduct': {
       const { id } = event;
-      if (!id) return { success: false, error: '商品ID不能为空' };
-      // 检查是否有订单引用该商品（简单检查）
-      const orderCount = await db.collection('orders')
-        .where({ 'items.productId': id }).count();
-      if (orderCount.total > 0) {
-        return { success: false, error: '该商品已有订单，无法删除，建议下架' };
-      }
-      await db.collection('products').doc(id).remove();
-      return { success: true, message: '商品已删除' };
+      if (!id) return { success: false, error: 'Product ID required' };
+      if (typeof db.runTransaction !== 'function') return { success: false, error: 'Product deletion requires transactions' };
+      return await db.runTransaction(async transaction => {
+        const current = (await transaction.collection('products').doc(id).get()).data;
+        if (!current) return { success: false, error: 'Product not found' };
+        const count = await transaction.collection('orders').where({ items: _.elemMatch({ productId: id }) }).count();
+        if (count.total || Number(current.reservedStock) > 0) return { success: false, error: 'Ordered or reserved product cannot be deleted; take it off sale instead' };
+        await transaction.collection('products').doc(id).remove();
+        return { success: true, message: 'Product deleted' };
+      });
     }
 
     case 'bannerList': {
@@ -1245,7 +1320,7 @@ exports.main = async (event, context) => {
         .get();
       const userMap = {};
       for (const msg of allMsgs.data) {
-        const uid = msg.isAdmin ? msg.targetId : (msg.fromId === 'admin' ? msg.targetId : msg.fromId);
+        const uid = msg.conversationId || (msg.isAdmin ? (msg.toId || msg.targetId) : (msg.fromId === 'admin' ? msg.targetId : msg.fromId));
         if (!uid || uid === 'admin') continue;
         if (!userMap[uid]) {
           userMap[uid] = {
@@ -1257,7 +1332,7 @@ exports.main = async (event, context) => {
             avatarUrl: ''
           };
         }
-        if (!msg.isAdmin && !msg.read) {
+        if (!msg.isAdmin && !(typeof msg.isRead === 'boolean' ? msg.isRead : msg.read)) {
           userMap[uid].unread++;
         }
       }
@@ -1276,6 +1351,11 @@ exports.main = async (event, context) => {
       if (!isAdmin) return { success: false, error: '无管理员权限' };
       const { userOpenId } = event;
       if (!userOpenId) return { success: false, error: '缺少用户ID' };
+      const canonical = await db.collection('messages')
+        .where({ conversationId: userOpenId })
+        .orderBy('createTime', 'asc').limit(200).get();
+      // Legacy Web rows remain visible only to authorized support accounts.
+      // Do not infer a consumer conversation or migrate historical messages.
       const fromUser = await db.collection('messages')
         .where({ fromId: userOpenId })
         .orderBy('createTime', 'asc')
@@ -1286,7 +1366,7 @@ exports.main = async (event, context) => {
         .orderBy('createTime', 'asc')
         .limit(200)
         .get();
-      const allMsgs = [...fromUser.data, ...toUser.data];
+      const allMsgs = [...canonical.data, ...fromUser.data, ...toUser.data];
       // 去重（两条查询可能返回同一条消息）
       const seen = new Set();
       const deduped = allMsgs.filter(m => {
@@ -1295,20 +1375,35 @@ exports.main = async (event, context) => {
         return true;
       });
       deduped.sort((a, b) => new Date(a.createTime) - new Date(b.createTime));
-      return { success: true, data: deduped };
+      // Acknowledge only incoming rows actually returned by this read snapshot.
+      // Do not clear an unseen next page or messages arriving after the queries.
+      const readIds = deduped.filter(message => message.conversationId === userOpenId &&
+        message.isAdmin === false && message.isRead === false).map(message => message._id);
+      for (let offset = 0; offset < readIds.length; offset += 20) {
+        await db.collection('messages').where({ _id: _.in(readIds.slice(offset, offset + 20)),
+          conversationId: userOpenId, isAdmin: false, isRead: false }).update({ data: { isRead: true } });
+      }
+      const acknowledged = new Set(readIds);
+      return { success: true, data: deduped.map(message => acknowledged.has(message._id)
+        ? { ...message, isRead: true } : message) };
     }
 
     case 'adminReply': {
-      const { userOpenId, content } = event;
+      const userOpenId = String(event.userOpenId || '').trim();
+      const content = String(event.content || '').trim();
       if (!userOpenId || !content) return { success: false, error: '参数不完整' };
       await db.collection('messages').add({
         data: {
-          fromId: 'admin',
-          targetId: userOpenId,
+          fromId: OPENID || 'admin',
+          adminAccountId: actor.accountId,
+          conversationId: userOpenId,
+          toId: userOpenId,
           content: content,
           type: 'text',
+          imageUrl: '',
+          orderId: '',
           isAdmin: true,
-          read: false,
+          isRead: false,
           createTime: db.serverDate()
         }
       });

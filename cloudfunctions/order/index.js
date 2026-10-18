@@ -4,94 +4,25 @@ const cloud = require('wx-server-sdk');
 cloud.init({ env: 'cloud1-d4gx1jxk675274501' });
 const db = cloud.database();
 const _ = db.command;
-const confirmPayment = require('./payment-effects').createPaymentEffects(cloud, db);
+const crypto = require('crypto');
+const lifecycle = require('./payment-effects').createPaymentLifecycle(cloud, db);
 
 const ORDER_EXPIRE_MS = 30 * 60 * 1000;
-// 回调丢失自愈：下单超过该时间仍 pending 且有预支付单的订单，主动查单补齐支付副作用
-const RECONCILE_AFTER_MS = 3 * 60 * 1000;
-
-function generateNonceStr(length = 32) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let str = '';
-  for (let i = 0; i < length; i++) str += chars.charAt(Math.floor(Math.random() * chars.length));
-  return str;
-}
-
-async function getSubMchId() {
-  const cfgRes = await db.collection('pay_config').doc('default').get().catch(() => null);
-  const config = (cfgRes && cfgRes.data) || {};
-  return String(config.subMchId || '').trim();
-}
-
-// 用户侧对账自愈（必须带微信用户上下文调用：cloudPay 云调用类接口在定时器/服务端直调下无有效票据）。
-// 1) 微信侧已支付但回调未落库的订单 → 补齐支付副作用（置 paid、扣库存、记现金流、生成佣金）；
-// 2) 已过期且微信侧未支付的订单 → 释放库存并关闭（maintenance 定时器在无上下文调用下事务不可用）。
-// 任何失败都不阻塞主流程，只记日志。
 async function reconcilePendingOrders(userId) {
-  try {
-    if (!userId) return;
-    const since = new Date(Date.now() - RECONCILE_AFTER_MS);
-    const res = await db.collection('orders')
-      .where({ userId, status: 'pending', createTime: _.lt(since) })
-      .limit(10).get().catch(() => ({ data: [] }));
-    const orders = res.data || [];
-    if (!orders.length) return;
-    const now = Date.now();
-    const subMchId = await getSubMchId();
-    for (const order of orders) {
-      try {
-        const expired = order.expireTime && new Date(order.expireTime).getTime() <= now;
-        const paidOnWx = order.prepayId && subMchId &&
-          cloud.cloudPay && typeof cloud.cloudPay.queryOrder === 'function'
-          ? await queryOrderState(subMchId, order.orderNo)
-          : null;
-        if (paidOnWx && paidOnWx.tradeState === 'SUCCESS') {
-          await confirmPayment({
-            outTradeNo: order.orderNo,
-            transactionId: paidOnWx.transactionId,
-            totalFee: paidOnWx.totalFee,
-            source: 'reconcile'
-          });
-          console.log('[order] 对账补齐已支付订单:', order.orderNo);
-          continue;
-        }
-        if (expired && order.inventoryStatus === 'reserved') {
-          const closed = await releaseOrderReservations(order, 'payment_timeout');
-          if (closed) console.log('[order] 对账关闭过期未支付订单:', order.orderNo);
-        }
-      } catch (err) {
-        console.error('[order] 对账失败:', order.orderNo, err && (err.message || err));
-      }
-    }
-  } catch (err) {
-    console.warn('[order] 对账流程异常:', err && (err.message || err));
+  if (!userId) return;
+  const result = await db.collection('orders').where({userId, status: _.in(['pending','closed'])})
+    .orderBy('createTime','desc').limit(10).get();
+  for (const order of result.data || []) {
+    try {
+      if (order.status === 'pending' && order.expireTime && new Date(order.expireTime).getTime() <= Date.now()) await lifecycle.close(order._id,'payment_timeout');
+      else if (order.paymentSubMchId && order.paymentPhase !== 'not_started') await lifecycle.query(order);
+    } catch (error) { console.warn('[order] 原单支付结果待核对', order.orderNo); }
   }
-}
-
-async function queryOrderState(subMchId, orderNo) {
-  try {
-    const query = await cloud.cloudPay.queryOrder({
-      subMchId, outTradeNo: orderNo, nonceStr: generateNonceStr()
-    });
-    if (!query) return null;
-    const totalFeeValue = query.totalFee !== undefined ? query.totalFee : query.total_fee;
-    return {
-      tradeState: query.tradeState || query.trade_state || '',
-      transactionId: query.transactionId || query.transaction_id || '',
-      totalFee: totalFeeValue === undefined ? null : Number(totalFeeValue)
-    };
-  } catch (err) {
-    console.warn('[order] 查单失败:', orderNo, err && (err.message || err));
-    return null;
-  }
-}
-
-function updatedCount(result) {
-  return result && result.stats ? result.stats.updated : result && result.updated;
 }
 
 function withTransaction(work) {
-  return typeof db.runTransaction === 'function' ? db.runTransaction(work) : work(db);
+  if (typeof db.runTransaction !== 'function') throw new Error('订单处理需要事务支持');
+  return db.runTransaction(work);
 }
 
 function normalizeQuantity(value) {
@@ -121,7 +52,7 @@ function findSpec(product, specName) {
 function availableStock(product, spec) {
   const stock = Number(spec ? spec.stock : product.stock) || 0;
   const reserved = Number(spec ? spec.reservedStock : product.reservedStock) || 0;
-  return stock - reserved;
+  return Math.min(stock - reserved, (Number(product.stock) || 0) - (Number(product.reservedStock) || 0));
 }
 
 async function resolveFullReduction(database, amount) {
@@ -175,18 +106,6 @@ function reserveProduct(product, specName, quantity) {
   };
 }
 
-function releaseProduct(product, specName, quantity) {
-  const specs = Array.isArray(product.specs) ? product.specs.map(spec => ({ ...spec })) : [];
-  const specIndex = specs.findIndex(spec => spec.name === specName);
-  if (specIndex >= 0) {
-    specs[specIndex].reservedStock = Math.max(0, (Number(specs[specIndex].reservedStock) || 0) - quantity);
-  }
-  return {
-    specs,
-    reservedStock: Math.max(0, (Number(product.reservedStock) || 0) - quantity)
-  };
-}
-
 async function getCommissionRate(database = db) {
   try {
     const payRes = await database.collection('pay_config').doc('default').get().catch(() => null);
@@ -205,34 +124,6 @@ async function resolveActiveAgentId(referrerId, buyerOpenId, database = db) {
   const agentRes = await database.collection('users').doc(candidate).get().catch(() => null);
   const agent = agentRes && agentRes.data;
   return agent && agent.isAgent && agent.agentInfo && agent.agentInfo.status === 'active' ? candidate : '';
-}
-
-async function releaseOrderReservations(order, reason) {
-  return withTransaction(async transaction => {
-    const currentRes = await transaction.collection('orders').doc(order._id).get().catch(() => null);
-    const current = currentRes && currentRes.data;
-    if (!current || current.status !== 'pending' || current.inventoryStatus !== 'reserved') return false;
-    const reservationRes = await transaction.collection('inventory_reservations')
-      .where({ orderId: order._id, status: 'reserved' }).get();
-    for (const reservation of reservationRes.data || []) {
-      const productRes = await transaction.collection('products').doc(reservation.productId).get();
-      if (!productRes.data) continue;
-      const next = releaseProduct(productRes.data, reservation.spec, reservation.quantity);
-      await transaction.collection('products').doc(reservation.productId).update({
-        data: { ...next, updateTime: db.serverDate() }
-      });
-      await transaction.collection('inventory_reservations').doc(reservation._id).update({
-        data: { status: 'released', releaseReason: reason, releaseTime: db.serverDate() }
-      });
-    }
-    await transaction.collection('orders').doc(order._id).update({
-      data: {
-        status: 'closed', inventoryStatus: 'released', closeReason: reason,
-        closeTime: db.serverDate(), updateTime: db.serverDate()
-      }
-    });
-    return true;
-  });
 }
 
 async function settleCommission(orderId) {
@@ -266,14 +157,34 @@ exports.main = async (event) => {
           return { success: false, error: '订单号格式无效，请重试' };
         }
         const safeAddress = normalizeAddress(address);
-        const duplicate = await db.collection('orders').where({ orderNo }).count();
-        if (duplicate.total > 0) return { success: false, error: '订单号已存在，请重试' };
+        const requestId = String(event.requestId || orderNo);
+        if (!/^[A-Za-z0-9_-]{8,100}$/.test(requestId)) throw new Error('提交标识无效');
+        const requestDocId = crypto.createHash('sha256').update(requestId).digest('hex').slice(0,32);
+        const orderDocId = crypto.createHash('sha256').update('order:'+orderNo).digest('hex').slice(0,32);
+        const createPayload = JSON.stringify({orderNo, items:items.map(item=>({productId:String(item.productId||''),spec:String(item.spec||''),quantity:Number(item.quantity)})),address:safeAddress,remark:String(remark||'').slice(0,200),couponId:String(event.couponId||''),totalFee:event.totalFee===undefined?null:event.totalFee,couponDiscount:event.couponDiscount===undefined?null:event.couponDiscount,fullReductionDiscount:event.fullReductionDiscount===undefined?null:event.fullReductionDiscount,removeCartKeys:(event.removeCartKeys||[]).map(String).sort()});
 
         const userRes = await db.collection('users').doc(OPENID).get().catch(() => null);
         const user = (userRes && userRes.data) || {};
         const agentId = await resolveActiveAgentId(user.referrer, OPENID);
         const commissionRate = await getCommissionRate();
         const result = await withTransaction(async transaction => {
+          const existingRequest = (await transaction.collection('order_create_requests').where({_id:requestDocId}).limit(1).get()).data[0];
+          if (existingRequest) {
+            if (existingRequest.requestId !== requestId || existingRequest.userId !== OPENID || existingRequest.createPayload !== createPayload) throw new Error('IDEMPOTENCY_CONFLICT: 提交标识与用户或内容不一致');
+            if (existingRequest.outcome === 'rejected') return {...existingRequest.result};
+            const existingOrder = (await transaction.collection('orders').doc(existingRequest.result.orderId).get()).data;
+            if (!existingOrder || existingOrder.userId !== OPENID || existingOrder.orderNo !== orderNo) throw new Error('提交记录与原订单不一致，需核对');
+            return {...existingRequest.result, duplicate:true};
+          }
+          const duplicate = await transaction.collection('orders').where({orderNo}).limit(1).get();
+          if (duplicate.data.length) throw new Error('IDEMPOTENCY_CONFLICT: 订单号已绑定其他提交');
+          // A terminal refusal competes for the same unique request anchor as
+          // creation. No delayed identical request can commit after this refusal.
+          async function rejectCreate(error) {
+            const response={success:false,code:'CREATE_REJECTED',creationOutcome:'rejected',creationOutcomeVersion:1,requestId,orderNo,error};
+            await transaction.collection('order_create_requests').add({data:{_id:requestDocId,requestId,userId:OPENID,createPayload,orderNo,outcome:'rejected',result:response,createTime:db.serverDate()}});
+            return response;
+          }
           let calculatedTotal = 0;
           const enrichedItems = [];
           const productUpdates = [];
@@ -288,8 +199,12 @@ exports.main = async (event) => {
             const spec = findSpec(product, item.spec || '');
             const specName = spec ? spec.name : '';
             if (availableStock(product, spec) < quantity) throw new Error('库存不足: ' + product.name);
-            const unitPrice = Number(spec && spec.price) || Number(product.price) || 0;
+            const rawPrice = spec && spec.price !== undefined ? spec.price : product.price;
+            const unitPrice = Number(rawPrice);
+            if (!['number', 'string'].includes(typeof rawPrice) || String(rawPrice).trim() === '' ||
+                !Number.isSafeInteger(unitPrice) || unitPrice <= 0) throw new Error('商品价格无效，请联系商家');
             calculatedTotal += unitPrice * quantity;
+            if (!Number.isSafeInteger(calculatedTotal)) throw new Error('订单金额超出范围');
             enrichedItems.push({
               productId: product._id, name: product.name, spec: specName,
               image: (product.images && product.images[0]) || '', quantity, price: unitPrice
@@ -299,11 +214,11 @@ exports.main = async (event) => {
 
           const fullReductionDiscount = await resolveFullReduction(transaction, calculatedTotal);
           if (event.fullReductionDiscount !== undefined && Number(event.fullReductionDiscount) !== fullReductionDiscount) {
-            throw new Error('优惠信息已变化，请刷新后重试');
+            return rejectCreate('优惠信息已变化，请刷新后重试');
           }
           const couponDiscount = await resolveCouponDiscount(transaction, event.couponId || '', OPENID, calculatedTotal - fullReductionDiscount);
           if (event.couponDiscount !== undefined && Number(event.couponDiscount) !== couponDiscount) {
-            throw new Error('优惠信息已变化，请刷新后重试');
+            return rejectCreate('优惠信息已变化，请刷新后重试');
           }
           const actualTotalFee = calculatedTotal - couponDiscount - fullReductionDiscount;
           if (!Number.isInteger(actualTotalFee) || actualTotalFee < 1) {
@@ -329,6 +244,7 @@ exports.main = async (event) => {
 
           const expireTime = new Date(Date.now() + ORDER_EXPIRE_MS);
           const orderResult = await transaction.collection('orders').add({ data: {
+            _id: orderDocId, requestId, createPayload, paymentPhase: 'not_started', paymentCloseRequested: false,
             orderNo, userId: OPENID, items: enrichedItems, totalFee: actualTotalFee,
             originalTotalFee: calculatedTotal, couponDiscount, couponId: event.couponId || '',
             fullReductionDiscount,
@@ -351,9 +267,12 @@ exports.main = async (event) => {
               status: 'used', useTime: db.serverDate(), orderId: orderResult._id, updateTime: db.serverDate()
             } });
           }
-          return { orderId: orderResult._id, actualTotalFee, calculatedTotal, couponDiscount, fullReductionDiscount };
+          const response = {orderId:orderResult._id,actualTotalFee,calculatedTotal,couponDiscount,fullReductionDiscount};
+          await transaction.collection('order_create_requests').add({data:{_id:requestDocId,requestId,userId:OPENID,createPayload,orderNo,outcome:'created',result:response,createTime:db.serverDate()}});
+          return response;
         });
 
+        if (result.creationOutcome === 'rejected') return result;
         try {
           const cartRes = await db.collection('cart').where({ userId: OPENID }).get();
           if (cartRes.data.length > 0) {
@@ -368,6 +287,17 @@ exports.main = async (event) => {
           fullReductionDiscount: result.fullReductionDiscount };
       }
 
+      case 'recoverCreate': {
+        const requestId=String(event.requestId||'');
+        if(!/^[A-Za-z0-9_-]{8,100}$/.test(requestId))return {success:false,error:'提交标识无效'};
+        const id=crypto.createHash('sha256').update(requestId).digest('hex').slice(0,32);
+        const row=(await db.collection('order_create_requests').where({_id:id}).limit(1).get()).data[0];
+        if(!row||row.requestId!==requestId||row.userId!==OPENID)return {success:false,code:'CREATE_NOT_FOUND',error:'未找到本人的已提交订单，请沿原提交重试'};
+        if(row.outcome==='rejected')return {...row.result,recovered:true};
+        const order=(await db.collection('orders').doc(row.result.orderId).get()).data;
+        if(!order||order.userId!==OPENID||order.orderNo!==row.orderNo)return {success:false,error:'原订单需核对'};
+        return {success:true,orderId:order._id,totalFee:order.totalFee,recovered:true};
+      }
       case 'list': {
         const pageSize = Math.min(Number(event.pageSize) || 20, 50);
         const page = Math.max(Number(event.page) || 1, 1);
@@ -394,7 +324,10 @@ exports.main = async (event) => {
         if (!event.id) return { success: false, error: '缺少订单ID' };
         const res = await db.collection('orders').doc(event.id).get().catch(() => null);
         if (!res || !res.data || res.data.userId !== OPENID) return { success: false, error: '订单不存在或无权限' };
-        return { success: true, data: res.data };
+        if (res.data.paymentSubMchId && ['pending','closed'].includes(res.data.status)) {
+          try { await lifecycle.query(res.data); } catch (error) { /* keep original state, expose pending check */ }
+        }
+        return { success: true, data: (await db.collection('orders').doc(event.id).get()).data };
       }
 
       case 'updateStatus': {
@@ -428,7 +361,7 @@ exports.main = async (event) => {
           const refundAttempt = (Number(order.refundAttempt) || 0) + 1;
           const refundResult = await transaction.collection('refunds').add({ data: {
             idempotencyKey: `refund_request:${order._id}:${refundAttempt}`,
-            orderId: order._id, orderNo: order.orderNo, userId: OPENID, prevStatus: order.status,
+            orderId: order._id, orderNo: order.orderNo, userId: OPENID, prevStatus: order.status, subMchId: order.paymentSubMchId || '',
             type: refundType, reason: String(event.reason).slice(0, 100),
             description: String(event.description || '').slice(0, 1000),
             images: Array.isArray(event.images) ? event.images.slice(0, 6) : [], status: 'pending',
@@ -464,8 +397,7 @@ exports.main = async (event) => {
         const order = orderRes && orderRes.data;
         if (!order || order.userId !== OPENID) return { success: false, error: '订单不存在或无权限' };
         if (order.status !== 'pending') return { success: false, error: '当前订单状态不可取消' };
-        const closed = await releaseOrderReservations(order, 'customer_cancel');
-        return closed ? { success: true } : { success: false, error: '订单状态已变化，请刷新' };
+        return lifecycle.close(order._id, 'customer_cancel');
       }
 
       default:

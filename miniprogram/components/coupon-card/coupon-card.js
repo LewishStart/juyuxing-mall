@@ -14,8 +14,8 @@ Component({
       var amount = '';
       var desc = '';
       if (coupon.type === 'percent') {
-        amount = (coupon.value || 0) + '折';
-        desc = '全场通用' + (coupon.value || 0) + '折';
+        amount = '减' + (coupon.value || 0) + '%';
+        desc = '全场通用' + amount;
       } else {
         amount = (Number(coupon.value || 0) / 100).toFixed(0);
         desc = '满' + ((coupon.minSpend || 0) / 100).toFixed(0) + '减' + amount;

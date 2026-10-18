@@ -1,3 +1,5 @@
+'use strict';
+
 // =============================================================
 // 一次性云函数：更新小紫瓶商品详情（description）
 // 部署后在微信开发者工具「云开发」面板触发即可。
@@ -7,7 +9,9 @@ const cloud = require('wx-server-sdk')
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
 const db = cloud.database()
 
-exports.main = async (event, context) => {
+exports.main = async () => ({ success: false, code: 'MAINTENANCE_DISABLED', error: 'Runtime maintenance is disabled; use a separately reviewed controlled migration.' });
+
+async function retiredMaintenance(event = {}, context) {
   const NEW_DESCRIPTION = `<p style="font-weight:600;font-size:30rpx;color:#2D4A3E;margin:0 0 12rpx;">一、品牌简介</p>
 <p style="font-weight:600;font-size:28rpx;color:#4A3F35;margin:16rpx 0 8rpx;">1.1 品牌定位</p>
 <p>林元元是专注中医日化领域的本土护肤防护品牌，深耕传统草本养护理念，秉持"草本温和、安全高效、全家适用"的核心品牌理念，依托传统中药配方结合现代温和生产工艺，主打高适配、高安全的肌肤日常防护类日化产品。品牌坚守天然、无多余化学添加的产品研发准则，聚焦大众日常肌肤不适问题，打造适配全年龄段人群的居家、旅行通用肌肤防护单品，致力于让传统草本养护智慧适配现代家庭日常护肤需求。</p>

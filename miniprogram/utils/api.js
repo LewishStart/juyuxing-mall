@@ -29,6 +29,7 @@ const API = {
 
   // 订单
   createOrder: (data, options) => call('order', Object.assign({ action: 'create' }, data || {}), options),
+  recoverOrderCreate: (requestId, options) => call('order', { action: 'recoverCreate', requestId }, options),
   getOrderList: (params, options) => call('order', Object.assign({ action: 'list' }, params || {}), options),
   getOrderCounts: (options) => call('order', { action: 'counts' }, options),
   getOrderDetail: (id, options) => call('order', { action: 'detail', id }, options),

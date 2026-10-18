@@ -74,9 +74,10 @@ function createRefundExecutor(cloud, db, logger = console) {
       const latest = (await tx.collection('refunds').doc(rf._id).get()).data;
       if (!latest || latest.status !== 'processing' || latest.claimToken !== rf.claimToken) throw new Error('退款执行锁已失效');
       if (latest.type === 'return_refund' && latest.returnStatus !== 'received') throw new Error('退货尚未确认收货');
-      await applyRefundEffects(tx, db, order, latest, latest.restock === true);
+      const effects = await applyRefundEffects(tx, db, order, latest, latest.restock === true);
       await tx.collection('refunds').doc(rf._id).update({ data: {
         status: 'approved', refundId: wechatRefundId, refundChannel: channel, completionVersion: 2,
+        ...effects,
         outRefundNo: rf.outRefundNo, channelStatus: 'SUCCESS', lastProcessError: '',
         refundTime: db.serverDate(), processTime: db.serverDate()
       } });
@@ -185,8 +186,26 @@ function createRefundExecutor(cloud, db, logger = console) {
   }
 
 
+  async function recoverInventory(id) {
+    return db.runTransaction(async tx => {
+      const refund = (await tx.collection('refunds').doc(id).get()).data;
+      if (!refund || refund.status !== 'approved' || refund.inventoryRestockStatus !== 'pending_exception') return null;
+      if (refund.completionVersion !== 2 || refund.channelStatus !== 'SUCCESS' || !refund.refundId || !refund.outRefundNo) {
+        throw new Error('Verified original refund receipt required for inventory recovery');
+      }
+      const order = (await tx.collection('orders').doc(refund.orderId).get()).data;
+      if (!order || order.status !== 'refunded') throw new Error('Financial refund is not complete');
+      const effects = await applyRefundEffects(tx, db, order, refund, refund.restock === true);
+      await tx.collection('refunds').doc(id).update({ data: { ...effects, processTime: db.serverDate() } });
+      return { success: true, completed: true, ...effects,
+        message: effects.inventoryRestockStatus === 'pending_exception' ? 'Refund money completed; inventory exception remains' : 'Original refund inventory recovered; no channel submission' };
+    });
+  }
+
   async function execute(id, force = true) {
     try {
+      const recovered = await recoverInventory(id);
+      if (recovered) return recovered;
       const rf = await claim(id, force);
       if (!rf) {
         const current = (await db.collection('refunds').doc(id).get()).data;
@@ -197,9 +216,11 @@ function createRefundExecutor(cloud, db, logger = console) {
       let outcome;
       try { outcome = await processOne(rf); }
       catch (error) { outcome = await manualReview(rf, errorText(error)); }
+      const completedRefund = outcome === 'completed' ? (await db.collection('refunds').doc(id).get()).data : null;
       return { success: outcome !== 'manualReview', completed: outcome === 'completed',
+        ...(completedRefund ? { inventoryRestockStatus: completedRefund.inventoryRestockStatus, inventoryRestockError: completedRefund.inventoryRestockError } : {}),
         channelAccepted: outcome === 'waiting', message: outcome === 'completed'
-          ? '渠道已确认退款完成并入账' : '退款尚未完成，请核对原单，不要重复退款',
+          ? (completedRefund.inventoryRestockStatus === 'pending_exception' ? '退款已入账，库存异常待恢复；不要重复退款' : '渠道已确认退款完成并入账') : '退款尚未完成，请核对原单，不要重复退款',
         ...(outcome === 'manualReview' ? { error: '退款需要核对原单，请勿重复提交' } : {}) };
     } catch (error) {
       event(logger, 'refund.local_failed', { id, code: error.code });
@@ -207,6 +228,13 @@ function createRefundExecutor(cloud, db, logger = console) {
     }
   }
   async function sweep() {
+    const stockPending = await db.collection('refunds').where({ status: 'approved', inventoryRestockStatus: 'pending_exception', completionVersion: 2 }).limit(3).get();
+    let inventoryRecovered = 0, inventoryPending = 0;
+    for (const refund of stockPending.data || []) {
+      const result = await recoverInventory(refund._id);
+      if (result && result.inventoryRestockStatus === 'completed') inventoryRecovered++;
+      else inventoryPending++;
+    }
     const pending = await db.collection('refunds').where({ status: _.in(ACTIVE) }).orderBy('processTime', 'asc').limit(20).get();
     const counts = { processed: 0, completed: 0, waiting: 0, manualReview: 0 };
     for (const row of pending.data || []) {
@@ -217,7 +245,7 @@ function createRefundExecutor(cloud, db, logger = console) {
       try { counts[await processOne(rf)]++; }
       catch (error) { await manualReview(rf, errorText(error)); counts.manualReview++; }
     }
-    return { success: true, ...counts };
+    return { success: true, ...counts, inventoryRecovered, inventoryPending };
   }
   return { execute, sweep };
 }

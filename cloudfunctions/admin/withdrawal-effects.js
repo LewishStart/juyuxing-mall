@@ -7,6 +7,64 @@ const ACTIVE = new Set(['ACCEPTED', 'PROCESSING', 'WAIT_USER_CONFIRM', 'TRANSFER
 const CLOSED = new Set(['FAIL', 'CANCELLED']);
 const CLAIM_MS = 60 * 1000;
 
+// Bounded, immutable-key cursor scan. Never accept a truncated financial ledger.
+async function scanLedger(database, name, filter, command, max = 2000) {
+  const rows = [];
+  let cursor = '';
+  for (;;) {
+    const where = cursor ? { ...filter, _id: command.gt(cursor) } : filter;
+    const result = await database.collection(name).where(where).orderBy('_id', 'asc').limit(100).get();
+    if (!result || !Array.isArray(result.data)) throw new Error('账本读取不完整，请核对原单');
+    const page = result.data;
+    for (const row of page) {
+      if (typeof row._id !== 'string' || !row._id || row._id <= cursor) throw new Error('账本分页不完整，请核对原单');
+      cursor = row._id;
+      rows.push(row);
+    }
+    if (rows.length > max) throw new Error('账本超过单次安全核对容量，请联系财务分批核对');
+    if (page.length < 100) return rows;
+  }
+}
+
+function money(value, positive = false) {
+  if (!Number.isSafeInteger(value) || positive && value <= 0) throw new Error('账本金额无效，请核对原单');
+  return value;
+}
+function sumMoney(rows) {
+  return rows.reduce((sum, row) => money(sum + money(row.amount)), 0);
+}
+
+async function agentBalance(database, agentId, command) {
+  const commissions = await scanLedger(database, 'commissions', { agentId, status: command.in(['settled', 'withdrawing', 'frozen']) }, command);
+  const applications = await scanLedger(database, 'withdrawals', { agentId, status: command.in(['pending', 'processing', 'pending_pay', 'transferring']) }, command);
+  return balanceRows(commissions, applications);
+}
+
+function balanceRows(commissions, applications) {
+  const holds = new Map();
+  for (const row of commissions.filter(c => c.status === 'withdrawing')) {
+    if (!row.paidByWithdrawal) throw new Error('提现占用缺少原申请，请核对原单');
+    money(row.amount, true);
+    holds.set(row.paidByWithdrawal, money((holds.get(row.paidByWithdrawal) || 0) + row.amount));
+  }
+  let pendingAmount = 0;
+  for (const application of applications) {
+    money(application.amount, true);
+    const held = holds.get(application._id);
+    if (held !== undefined && held !== application.amount) throw new Error('提现占用账本不一致');
+    if (held === undefined && application.accountingVersion === 2 && ['pending_pay', 'transferring'].includes(application.status)) throw new Error('提现占用账本缺失');
+    pendingAmount = money(pendingAmount + application.amount);
+    holds.delete(application._id);
+  }
+  // An unmatched hold still occupies the balance; never make it available twice.
+  for (const held of holds.values()) pendingAmount = money(pendingAmount + held);
+  const ledgerBalance = sumMoney(commissions.filter(c => c.status !== 'frozen'));
+  const frozen = commissions.filter(c => c.status === 'frozen');
+  return { commissions, applications, ledgerBalance, pendingAmount,
+    pendingCount: applications.length + holds.size, frozenAmount: sumMoney(frozen), frozenCount: frozen.length,
+    available: Math.max(0, money(ledgerBalance - pendingAmount)) };
+}
+
 function createWithdrawalService(db, transfer, logger = console) {
   const tx = work => {
     if (typeof db.runTransaction !== 'function') throw new Error('提现需要数据库事务支持');
@@ -20,9 +78,10 @@ function createWithdrawalService(db, transfer, logger = console) {
       if (!wd || wd.outBatchNo !== billNo) throw new Error('转账单已变化，请重新核对');
       // Historical accounting is retained verbatim; it requires separate reconciliation.
       if (wd.accountingVersion === 2) {
-        const list = (await t.collection('commissions').where({ paidByWithdrawal: id }).limit(1000).get()).data || [];
-        if (list.some(c => !['withdrawing', 'paid'].includes(c.status)) ||
-            list.reduce((sum, c) => sum + Number(c.amount || 0), 0) !== wd.amount) throw new Error('提现占用账本不一致');
+        const list = await scanLedger(t, 'commissions', { paidByWithdrawal: id }, db.command);
+        if (list.length > 60) throw new Error('提现占用超过安全事务容量，请核对原单');
+        if (!Number.isSafeInteger(wd.amount) || wd.amount <= 0 || list.some(c => !Number.isSafeInteger(c.amount) || c.amount <= 0 || !['withdrawing', 'paid'].includes(c.status)) ||
+            sumMoney(list) !== wd.amount) throw new Error('提现占用账本不一致');
         const key = 'commission_payout:' + id;
         const entries = (await t.collection('cashflow_entries').where({ idempotencyKey: key }).limit(2).get()).data || [];
         if (entries.length > 1 || entries.some(e => e.amount !== wd.amount || e.status !== 'posted' ||
@@ -82,8 +141,23 @@ function createWithdrawalService(db, transfer, logger = console) {
       if (!wd || wd.status !== 'pending') return false;
       const user = (await t.collection('users').doc(wd.agentId).get()).data;
       if (!user) throw new Error('分销员账号不存在');
-      const rows = (await t.collection('commissions').where({ agentId: wd.agentId, status: 'settled' }).orderBy('settleTime', 'asc').limit(1000).get()).data || [];
-      if (!Number.isSafeInteger(wd.amount) || wd.amount < 30 || rows.reduce((sum, c) => sum + Number(c.amount || 0), 0) < wd.amount) throw new Error('可提现佣金已发生变化，请重新审核');
+      const balance = await agentBalance(t, wd.agentId, db.command);
+      money(wd.amount, true);
+      // The pending request itself already occupies its amount. Preserve every other reservation.
+      const netForThisRequest = money(balance.ledgerBalance - balance.pendingAmount + wd.amount);
+      if (wd.amount < 30 || netForThisRequest < wd.amount) throw new Error('可提现佣金已发生变化，请重新审核');
+      const time = value => { const parsed = new Date(value || 0).getTime(); return Number.isFinite(parsed) ? parsed : 0; };
+      const rows = balance.commissions.filter(c => c.status === 'settled' && c.amount > 0).sort((a, b) =>
+        time(a.settleTime) - time(b.settleTime) || time(a.createTime) - time(b.createTime) || a._id.localeCompare(b._id));
+      // Reserve and completion are separate <=100-operation transactions. Reject before mutations.
+      let capacity = 0, needed = wd.amount;
+      for (const row of rows) {
+        if (needed <= 0) break;
+        capacity += row.amount > needed ? 2 : 1;
+        needed -= Math.min(row.amount, needed);
+      }
+      const readBudget = 4 + Math.floor(balance.commissions.length / 100) + Math.floor(balance.applications.length / 100);
+      if (needed || capacity > 60 || readBudget + capacity + 4 > 95) throw new Error('提现流水超过安全事务容量，请分笔申请或核对原单');
       let remaining = wd.amount;
       for (const c of rows.filter(c => c.amount > 0)) {
         if (!remaining) break;
@@ -157,11 +231,20 @@ function createWithdrawalService(db, transfer, logger = console) {
       if (['success', 'approved', 'transferring'].includes(wd.status)) return { success: true, alreadyProcessed: true, message: '该提现已处理，请查询原单' };
       if (!['pending', 'pending_pay'].includes(wd.status)) return { success: false, error: '该提现申请已处理' };
       if (wd.status === 'pending' && !await reserve(id, remark)) return { success: true, alreadyProcessed: true };
+      const assertSubmissionBalance = async (t, current) => {
+        const user = (await t.collection('users').doc(current.agentId).get()).data;
+        if (!user) throw new Error('分销员账号不存在');
+        if (current.accountingVersion !== 2) throw new Error('历史提现占用未核实，请核对原单');
+        const balance = await agentBalance(t, current.agentId, db.command);
+        if (money(balance.ledgerBalance - balance.pendingAmount + money(current.amount, true)) < current.amount) throw new Error('佣金余额已发生退款冲销，保留原单待财务核对');
+        await bump(t, current.agentId);
+      };
       const token = crypto.randomBytes(16).toString('hex');
       const claimed = await tx(async t => {
         const latest = (await t.collection('withdrawals').doc(id).get()).data;
         if (latest.status !== 'pending_pay' || latest.transferClaimToken && Date.now() - new Date(latest.transferClaimTime).getTime() < CLAIM_MS) return null;
         const hadBill = !!latest.outBatchNo;
+        if (!hadBill) await assertSubmissionBalance(t, latest);
         const attempt = (Number(latest.transferAttempts) || 0) + 1;
         const billNo = latest.outBatchNo || transfer.genOutBillNo();
         await t.collection('withdrawals').doc(id).update({ data: {
@@ -185,6 +268,7 @@ function createWithdrawalService(db, transfer, logger = console) {
           await tx(async t => {
             const latest = (await t.collection('withdrawals').doc(id).get()).data;
             if (latest.outBatchNo !== billNo || latest.transferClaimToken !== token || latest.status === 'success') throw new Error('提现状态已变化');
+            await assertSubmissionBalance(t, latest);
             await t.collection('withdrawals').doc(id).update({ data: {
               lastOutBatchNo: billNo, outBillHistory: [...new Set([...(latest.outBillHistory || []), billNo])],
               outBatchNo: next, packageInfo: '', transferBillNo: ''
