@@ -1,3 +1,5 @@
+'use strict';
+
 const cloud = require('wx-server-sdk');
 const ENV_ID = 'cloud1-d4gx1jxk675274501';
 cloud.init({ env: ENV_ID });
@@ -8,19 +10,21 @@ exports.main = async (event, context) => {
   const { OPENID } = cloud.getWXContext();
   const action = event.action || 'sendMessage';
 
-  // 获取管理员 openId（支持多管理员）
-  let adminOpenId = '';
-  let adminOpenIds = [];
+  if (!OPENID) return { success: false, error: 'Authentication required', code: 'UNAUTHENTICATED' };
+  // Same active account and role authority as admin; legacy identifiers are not grants.
+  let account;
   try {
-    const adminRes = await db.collection('admin_config').doc('admin').get();
-    if (adminRes && adminRes.data) {
-      adminOpenId = adminRes.data.openId || '';
-      adminOpenIds = adminRes.data.adminOpenIds || [];
-    }
-  } catch (e) {}
-
-  // 管理员判断：兼容旧的 openId 字段和新的 adminOpenIds 数组
-  const isAdmin = !!(OPENID && (OPENID === adminOpenId || adminOpenIds.includes(OPENID)));
+    const result = await db.collection('admin_accounts')
+      .where({ wechatOpenId: OPENID, status: 'active' }).limit(1).get();
+    account = result.data && result.data[0];
+  } catch (error) {
+    return { success: false, error: 'Authorization unavailable', code: 'AUTH_UNAVAILABLE' };
+  }
+  const isAdmin = !!(account && ['owner', 'operations'].includes(account.role));
+  const ownerResult = await db.collection('admin_accounts')
+    .where({ role: 'owner', status: 'active' }).limit(1).get().catch(() => ({ data: [] }));
+  const owner = ownerResult.data && ownerResult.data[0];
+  const adminOpenId = owner && owner.wechatOpenId || 'admin';
 
   switch (action) {
 
@@ -73,6 +77,7 @@ exports.main = async (event, context) => {
       const { conversationId, pageSize = 50, page = 1 } = event;
       // 用户模式：使用自己的 openId；管理员模式：使用传入的 conversationId
       const cid = conversationId || OPENID;
+      if (!isAdmin && cid !== OPENID) return { success: false, error: 'Conversation forbidden', code: 'FORBIDDEN' };
 
       try {
         const res = await db.collection('messages')
@@ -158,6 +163,7 @@ exports.main = async (event, context) => {
     case 'markAsRead': {
       const { conversationId } = event;
       const cid = conversationId || OPENID;
+      if (!isAdmin && cid !== OPENID) return { success: false, error: 'Conversation forbidden', code: 'FORBIDDEN' };
 
       try {
         await db.collection('messages')

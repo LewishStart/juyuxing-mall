@@ -1,3 +1,5 @@
+'use strict';
+
 // 一次性云函数：上传小紫瓶产品图 + 更新 images + 补 categoryId
 const cloud = require('wx-server-sdk');
 const fs = require('fs');
@@ -6,7 +8,9 @@ const path = require('path');
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
 
-exports.main = async (event, context) => {
+exports.main = async () => ({ success: false, code: 'MAINTENANCE_DISABLED', error: 'Runtime maintenance is disabled; use a separately reviewed controlled migration.' });
+
+async function retiredMaintenance(event = {}, context) {
   const logs = [];
   try {
     // 1. 读取云函数目录内的产品图片

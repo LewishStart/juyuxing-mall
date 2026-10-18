@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+require('./lib/payment-test-network');
 
 const assert = require('assert');
 const fs = require('fs');
@@ -12,10 +13,11 @@ function harness() {
   let tables = {
     admin_config: [{ _id: 'admin', openId: 'owner-wx' }],
     admin_accounts: [{ _id: 'owner', wechatOpenId: 'owner-wx', role: 'owner', status: 'active' }],
+    users: [{ _id: 'agent' }], // Existing commission owner supplies the same-agent conflict fence.
     refunds: [{ _id: 'rf', orderId: 'order', status: 'pending_auto', outRefundNo: 'RF-test',
       approvedAmount: 100, subMchId: 'merchant', executionVersion: 2, restock: true, type: 'refund_only', processTime: new Date(0) }],
     orders: [{ _id: 'order', orderNo: 'ORDER-test', totalFee: 100, transactionId: 'TX-test',
-      status: 'refunding', refundId: 'rf', agentId: 'agent', items: [{ productId: 'product', spec: 'sku', quantity: 1 }] }],
+      status: 'refunding', inventoryStatus: 'committed', refundId: 'rf', agentId: 'agent', items: [{ productId: 'product', spec: 'sku', quantity: 1 }] }],
     products: [{ _id: 'product', stock: 2, sales: 1, specs: [{ name: 'sku', stock: 2 }] }],
     commissions: [{ _id: 'commission', orderId: 'order', agentId: 'agent', status: 'frozen', amount: 33 }],
     cashflow_entries: [], inventory_adjustments: [], pay_config: [{ _id: 'default', subMchId: 'merchant' }]
@@ -235,20 +237,64 @@ const tests = {
     }
   },
   async deploymentCopiesAgree() {
-    assert.equal(fs.readFileSync(path.join(root, 'cloudfunctions/admin/refund-effects.js'), 'utf8'),
-      fs.readFileSync(path.join(root, 'cloudfunctions/refund-processor/refund-effects.js'), 'utf8'));
+    for (const file of ['refund-effects.js', 'refund-execution.js', 'wxpay-direct.js', 'payment-diagnostics.js']) {
+      assert.equal(fs.readFileSync(path.join(root, 'cloudfunctions/admin', file), 'utf8'),
+        fs.readFileSync(path.join(root, 'cloudfunctions/refund-processor', file), 'utf8'), file);
+    }
   },
-  async approvalOnlyQueuesAndRejectRaceDoesNotReverseCompletedRefund() {
+  async approvalSubmitsOnceButAcceptanceNeverPostsAndRejectCannotReverse() {
     const h = harness(); h.tables().refunds[0].status = 'pending';
     const result = await h.admin({ action: 'processRefund', refundId: 'rf', approve: true });
     assert.equal(result.success, true);
-    assert.equal(h.tables().refunds[0].status, 'pending_auto');
+    assert.equal(result.completed, false);
+    assert.equal(h.tables().refunds[0].status, 'channel_processing');
     assert.equal(h.tables().refunds[0].executionVersion, 2);
     assert.equal(h.tables().orders[0].status, 'refunding');
-    assert.equal(h.refunds, 0);
+    assert.equal(h.refunds, 1, 'one-click approval may submit once; acceptance is not completion');
     assert.equal(h.tables().cashflow_entries.length, 0);
+    assert.equal(h.tables().products[0].stock, 2);
+    assert.equal(h.tables().commissions[0].status, 'frozen');
     assert.equal((await h.admin({ action: 'processRefund', refundId: 'rf', approve: false })).success, false);
     assert.equal(h.tables().orders[0].status, 'refunding');
+    h.success(); h.ready(); await h.run();
+    assert.equal(h.tables().orders[0].status, 'refunded');
+    assert.equal(h.tables().cashflow_entries.length, 1);
+    assert.equal((await h.admin({ action: 'processRefund', refundId: 'rf', approve: false })).success, false);
+    await h.admin({ action: 'executeRefund', refundId: 'rf' });
+    assert.equal(h.refunds, 1); assert.equal(h.tables().cashflow_entries.length, 1);
+  },
+  async adminTimeoutOnlyReconcilesOriginalBillAndNeverPosts() {
+    const h = harness(); h.tables().refunds[0].status = 'pending'; h.refund = new Error('timeout');
+    const result = await h.admin({ action: 'processRefund', refundId: 'rf', approve: true });
+    assert.equal(result.completed, false); assert.equal(h.refunds, 1);
+    await h.admin({ action: 'retryRefund', refundId: 'rf' });
+    h.ready(); await h.run();
+    assert.equal(h.refunds, 1); assert.equal(h.tables().cashflow_entries.length, 0);
+    assert.equal(h.tables().orders[0].status, 'refunding');
+  },
+  async sharedAdminAndWorkerClaimAllowsOnlyOneSubmission() {
+    const h = harness();
+    await Promise.all([h.admin({ action: 'executeRefund', refundId: 'rf' }), h.run()]);
+    assert.equal(h.refunds, 1); assert.equal(h.tables().cashflow_entries.length, 0);
+    assert.notEqual(h.tables().refunds[0].status, 'approved');
+  },
+  async claimWriteFailurePreventsEveryExternalCall() {
+    const h = harness(); h.failWrite = 'refunds';
+    const result = await h.admin({ action: 'executeRefund', refundId: 'rf' });
+    assert.equal(result.success, false); assert.equal(h.refunds + h.queries, 0);
+    assert.equal(h.tables().refunds[0].status, 'pending_auto');
+  },
+  async explicitBalanceRefusalAllowsOperatorRetryOnOriginalChannel() {
+    const h = harness(); h.refund = { returnCode: 'SUCCESS', resultCode: 'FAIL', errCode: 'NOTENOUGH' };
+    await h.admin({ action: 'executeRefund', refundId: 'rf' });
+    assert.equal(h.tables().refunds[0].definitiveRejected, true);
+    h.ready(); await h.run(); assert.equal(h.refunds, 1, 'worker never automatically retries money');
+    h.refund = { returnCode: 'SUCCESS', resultCode: 'SUCCESS', refundId: 'WX-refund' };
+    // A query-only sweep must not erase the documented refusal needed by the operator.
+    const result = await h.admin({ action: 'retryRefund', refundId: 'rf' });
+    assert.equal(result.completed, false); assert.equal(h.refunds, 2);
+    assert.equal(h.tables().refunds[0].submittedChannel, 'cloudbase');
+    assert.equal(h.tables().cashflow_entries.length, 0);
   },
   async mockApprovalRollsBackAsOneTransaction() {
     const h = harness(); h.tables().refunds[0].status = 'pending';

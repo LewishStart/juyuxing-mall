@@ -12,6 +12,8 @@
     {
       "name": "orders",
       "indexes": [
+        {"name": "order_agent_cursor", "fields": [{"name": "agentId", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "order_status_cursor", "fields": [{"name": "status", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
         { "name": "order_no_unique", "unique": true, "fields": [{ "name": "orderNo", "direction": "asc" }] },
         { "name": "user_orders", "fields": [
           { "name": "userId", "direction": "asc" },
@@ -32,6 +34,11 @@
     {
       "name": "commissions",
       "indexes": [
+        {"name": "commission_agent_status_cursor", "fields": [{"name": "agentId", "direction": "asc"}, {"name": "status", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "commission_withdrawal_cursor", "fields": [{"name": "paidByWithdrawal", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "commission_order_cursor", "fields": [{"name": "orderId", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "commission_status_cursor", "fields": [{"name": "status", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "commission_agent_cursor", "fields": [{"name": "agentId", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
         { "name": "commission_idempotency_unique", "unique": true, "fields": [{ "name": "idempotencyKey", "direction": "asc" }] },
         { "name": "agent_commissions", "fields": [
           { "name": "agentId", "direction": "asc" },
@@ -56,6 +63,8 @@
     {
       "name": "withdrawals",
       "indexes": [
+        {"name": "withdrawal_agent_status_cursor", "fields": [{"name": "agentId", "direction": "asc"}, {"name": "status", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
+        {"name": "withdrawal_agent_cursor", "fields": [{"name": "agentId", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
         { "name": "withdrawal_idempotency_unique", "unique": true, "fields": [{ "name": "idempotencyKey", "direction": "asc" }] },
         { "name": "agent_withdrawals", "fields": [
           { "name": "agentId", "direction": "asc" },
@@ -70,6 +79,8 @@
     {
       "name": "refunds",
       "indexes": [
+        { "name": "refund_inventory_recovery", "fields": [{ "name": "status", "direction": "asc" }, { "name": "inventoryRestockStatus", "direction": "asc" }, { "name": "completionVersion", "direction": "asc" }] },
+        { "name": "refund_inventory_list", "fields": [{ "name": "status", "direction": "asc" }, { "name": "inventoryRestockStatus", "direction": "asc" }, { "name": "createTime", "direction": "desc" }] },
         { "name": "refund_request_unique", "unique": true, "fields": [{ "name": "idempotencyKey", "direction": "asc" }] },
         { "name": "refund_user_time", "fields": [{ "name": "userId", "direction": "asc" }, { "name": "createTime", "direction": "desc" }] },
         { "name": "refund_status_time", "fields": [{ "name": "status", "direction": "asc" }, { "name": "createTime", "direction": "desc" }] },
@@ -138,6 +149,7 @@
     {
       "name": "cashflow_entries",
       "indexes": [
+        {"name": "cashflow_status_cursor", "fields": [{"name": "status", "direction": "asc"}, {"name": "_id", "direction": "asc"}]},
         { "name": "cashflow_idempotency_unique", "unique": true, "fields": [{ "name": "idempotencyKey", "direction": "asc" }] },
         { "name": "cashflow_status_time", "fields": [{ "name": "status", "direction": "asc" }, { "name": "createTime", "direction": "desc" }] }
       ]

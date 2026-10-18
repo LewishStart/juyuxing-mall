@@ -120,13 +120,17 @@ B 端默认使用现有小程序扫码确认登录。网页匿名身份只能创
   },
   "adminQrAuth": {
     "invoke": "auth != null"
-  }
+  },
+  "payNotify": { "invoke": "false" },
+  "init": { "invoke": "false" },
+  "updateProductDesc": { "invoke": "false" },
+  "uploadProductImage": { "invoke": "false" }
 }
 ```
 
 8. 将本地测试地址 `127.0.0.1:8765` 和正式后台域名加入 CloudBase Web 安全域名。
 
-后台登录二维码先落到稳定的主包首页 `pages/index/index`。首页仅在识别到后台专用 `q=` 场景参数时，立即中转到 `subpackages/admin-auth/confirm/confirm`；该确认页不在 A 端任何菜单出现，普通消费者入口和推广链接不会触发中转。仅对旧 `admin_config.openId/adminOpenIds` 中明确指定的管理员迁移或绑定未绑定的 owner 账号，不允许占用已绑定其他微信的店主账号。没有预先授权的微信扫码不会自动成为店主，历史 `ALLOW_ADMIN_BOOTSTRAP` 环境变量已不再生效。其他账号需在数据库迁移或账号管理流程中写入 `wechatOpenId`。后台接口只返回 `wechatBound`，不会把 OpenID 返回网页。
+后台登录二维码先落到稳定的主包首页 `pages/index/index`。首页仅在识别到后台专用 `q=` 场景参数时，立即中转到 `subpackages/admin-auth/confirm/confirm`；该确认页不在 A 端任何菜单出现，普通消费者入口和推广链接不会触发中转。扫码、小程序管理入口和客服权限统一读取 admin_accounts 中 active 且 wechatOpenId 明确绑定的账号及当前角色。旧 admin_config 标识不再授权，也不在登录时自动创建或绑定 owner。首次账号设置必须由环境管理员通过另行审核的受控流程完成，本次修复不执行迁移。后台接口只返回 `wechatBound`，不会把 OpenID 返回网页。
 
 ### 2026-09-07 修复部署范围
 
@@ -154,7 +158,7 @@ B 端默认使用现有小程序扫码确认登录。网页匿名身份只能创
 6. 支付后核对库存正式扣减、销售现金流和冻结佣金各只有一条。
 7. B 端填写物流公司和运单号并发货；重复发货不得重复改变资金或库存。
 8. A 端查看物流并确认收货；C 端佣金转为可提现。
-9. C 端申请提现，B 端财务在线下完成转账后点击“确认已打款”；核对佣金流水和现金流报表。当前一期不自动调用商户转账接口。
+9. C 端申请提现，B 端店主/财务审批并发起微信商家转账；先核对占用佣金、各端可用额度与报表未记支出，再由分销员本人确认收款。核对原单为 `SUCCESS` 后，佣金转为已支付、现金支出只记一笔；重复审批/核对不重复出款或入账。
 10. 分别验证发货前退款、退货退款、结算后退款及负佣金结转。
 
 最后由具备真实商户权限的账号完成人工小额支付、退款和提现。真实资金操作必须由负责人在微信和商户平台中亲自确认。
@@ -183,14 +187,30 @@ B 端默认使用现有小程序扫码确认登录。网页匿名身份只能创
 
 ## 9. 退款部署与验收
 
-退款申请是异步流程。B 端“同意”只会写入 `pending_auto`，不会提前记退款支出、回库存、冲销佣金或将订单改为已退款。
+退款最终结果是异步确认的。B 端“同意”先写入 `pending_auto`，并可立即提交一次退款请求；接口受理后保持 `channel_processing`，不提前记退款支出、回库存、冲销佣金或将订单改为已退款。只有权威查询确认对应原单最终成功，才完成本地事务入账。
 
-1. 部署 `admin`、`refund-processor` 和小程序代码；旧 `admin-refund-http` 已在代码中强制返回 `410 REFUND_ENDPOINT_RETIRED`，若线上存在 HTTP 触发器应移除。
+1. 由负责人完整部署 `admin`、`agent`、`withdrawal`、`refund-processor` 和受影响的小程序页面。`admin` 的 `withdrawal-effects.js`、两端相同的 `refund-execution.js`、`refund-effects.js`、`wxpay-direct.js`、`payment-diagnostics.js` 必须随各自函数上传；本地验证会检查副本一致。旧 `admin-refund-http` 已在代码中返回 `410 REFUND_ENDPOINT_RETIRED`，若线上存在 HTTP 触发器应另行核对处理，本轮不修改云端配置。
 2. 为 `refunds` 导入 `refund_queue_time` 复合索引：`status asc + processTime asc`。
 3. 店主或财务从 B 端退款页生成二维码，用已绑定的微信扫码进入后台登录确认页。
-4. 点击“处理并核对退款”。第一次可能提交退款；已提交、超时或被接管的记录只查询同一个退款单号，禁止自动重复提交。
+4. 点击“处理并核对退款”。管理端执行与此入口共享 claim/提交痕迹；已提交、超时或被接管的记录只核对原号原商户原通道，未知结果不切换通道提交。仅渠道明确 `NOTENOUGH` 拒绝时，操作员确认余额并查原单后才可按原号原通道重试，worker 不自动再次出款。
 5. 只有微信查询返回 `SUCCESS` 且退款单号、金额和订单号一致时，才在一个数据库事务中同步订单、退款、库存、佣金和现金流。
 6. `PROCESSING` 保留为“渠道处理中”；查询异常、关闭、金额不符和历史不确定记录进入 `manual_review`，均不能显示为已退款。
 7. 对历史 `refundChannel=wechat_manual` 或“订单已退款但渠道未确认”的记录逐笔核对商户平台和本地流水，不自动补账，也不直接重退。
 
 真机验收必须使用新建的小额测试订单，并分别验证：受理不等于成功、超时不重退、重复扫码不重复流水、退款成功后库存与佣金只处理一次。真实资金验收由具备商户权限的人在最后一步确认。
+
+当前 `refund-processor` 仅接受带操作员身份的 `action=sweep`；普通定时/支付通知没有该身份，不能据函数目录旧 `refundTimer` 声明假定队列自动推进。2026-10-18 只读观察到云端无定时器，本轮不新增。若需要无人值守自动核对，另行设计可信触发、权限和调度后再发布。
+
+新提现仅在审核时标记 `accountingVersion=2`、佣金 `withdrawing`，成功后转 `paid`。旧单和旧 `posted` 流水不自动迁移或改账；不要为本轮修复运行初始化或历史迁移。真实部署时另核 `wx-server-sdk` 版本、事务 where/get 支持、唯一幂等索引与事务操作/时间上限，本地模拟不能证明服务端支持。
+
+## Runtime authorization hardening (2026-10-18)
+
+The rule overrides above deny client/Web invocation of payNotify and retired one-off functions; they are a deployment template, not evidence of applied cloud rules. Verify the platform-specific payment trigger remains operational separately. Do not add a guessed SOURCE allowlist or expose a public HTTP route for notifications. Actual live invoke rules, deployed hashes, gateway routes and payment-trigger compatibility require colleague acceptance before release.
+
+payNotify independently queries CloudPay.queryOrder under pay_config/default.subMchId. It requires successful query/result/trade state, matching merchant and order number, positive integer totalFee matching the order, and a nonempty transactionId. subOpenid/sub_openid, when returned, must match the Mini Program order user; the service-provider openid belongs to a different app and is not compared. Both documented historical camelCase/snake_case response names are recognized. Missing association data, unknown payment, query errors or conflicting existing transaction IDs reject posting. Callback-supplied amounts and transaction IDs are never authoritative. syncTransaction additionally requires an active bound owner or finance account and never overwrites a conflicting existing transaction.
+
+The original official CloudPay.queryOrder page could not be retrieved during local implementation. Before release, validate actual authorized query responses include the required association fields and inspect failures using the original order number; never work around missing fields by trusting the incoming callback. This is not evidence of a completed real payment.
+
+QR tickets and new QR sessions carry the confirmed binding hash. Disabled accounts fail, roles are read on each business request, and ownership rebind invalidates old QR tickets and sessions. Existing QR sessions without the new binding hash must sign in again; valid password sessions retain current-account role/status checks. This code performs no account migration and does not mutate historical sessions automatically.
+
+init, updateProductDesc and uploadProductImage exports return MAINTENANCE_DISABLED before any operation for every caller. Remove their old deployments or deny every client entry under an explicitly controlled release procedure. New environment bootstrap or exceptional product migration needs a separately reviewed offline procedure; no runtime event or environment toggle enables these writers. Do not run them as part of deploying this patch.

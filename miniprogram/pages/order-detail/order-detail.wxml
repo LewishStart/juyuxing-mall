@@ -40,6 +40,14 @@
       </view>
     </view>
 
+    <view class="card section" wx:if="{{order.paymentResolutionRequired && order.status !== 'refunded'}}">
+      <text>原订单已收款，库存已释放或需商家核对。请按此订单申请退款，勿再次支付。</text>
+      <view>原支付交易号：{{order.transactionId}}</view>
+      <view wx:if="{{order.paymentSubMchId}}">原支付商户：{{order.paymentSubMchId}}</view>
+    </view>
+
+    <view class="card section" wx:if="{{order.status === 'pending' && order.paymentCloseError}}"><text>{{order.paymentCloseError}}</text></view>
+
     <!-- 收货地址 -->
     <view class="card section address-card" wx:if="{{order.address}}">
       <view class="address-name-row">
@@ -140,7 +148,7 @@
       <button class="action-btn action-ghost" bindtap="contactService">联系客服</button>
       <block wx:if="{{order.status === 'pending'}}">
         <button class="action-btn action-secondary" bindtap="cancelOrder">取消订单</button>
-        <button class="action-btn action-primary" bindtap="payOrder" disabled="{{submitting}}">{{submitting ? '处理中...' : '立即支付'}}</button>
+        <button class="action-btn action-primary" bindtap="payOrder" disabled="{{submitting || order.paymentCloseRequested}}">{{submitting ? '处理中...' : '立即支付'}}</button>
       </block>
       <block wx:elif="{{order.status === 'paid'}}">
         <button class="action-btn action-secondary" bindtap="requestRefund">申请退款</button>

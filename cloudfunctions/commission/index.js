@@ -6,10 +6,11 @@ cloud.init({ env: 'cloud1-d4gx1jxk675274501' });
 const db = cloud.database();
 
 function sanitizeCommission(item) {
+  if (!Number.isSafeInteger(item.amount)) throw new Error('佣金账本金额无效，请核对原单');
   return {
     _id: item._id,
     orderNo: item.orderNo || '',
-    amount: Number(item.amount) || 0,
+    amount: item.amount,
     rate: Number(item.rate) || 0,
     type: item.type || 'earning',
     status: item.status || '',

@@ -73,9 +73,10 @@ function httpsPostXml(url, xmlBody, pfxBuffer, passphrase) {
       res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
         try {
+          if (res.statusCode < 200 || res.statusCode >= 300) throw new Error('微信支付 HTTP 响应失败');
           resolve(parseWxXml(data));
         } catch (e) {
-          reject(new Error('微信支付响应解析失败: ' + String(data).slice(0, 300)));
+          reject(Object.assign(new Error('微信支付响应无法验证'), { code: 'CHANNEL_RESPONSE_INVALID' }));
         }
       });
     });
@@ -90,13 +91,13 @@ function httpsPostXml(url, xmlBody, pfxBuffer, passphrase) {
 
 // ===== 读取 pay_config 中的直连凭证 =====
 
-async function loadPayApiConfig(db) {
+async function loadPayApiConfig(db, requireCertificate = true) {
   try {
     const res = await db.collection('pay_config').doc('default').get();
     const cfg = (res && res.data) || {};
     const apiV2Key = String(cfg.apiV2Key || '').trim();
     const apiCertP12 = String(cfg.apiCertP12 || '').trim();
-    if (!apiV2Key || !apiCertP12) return null;
+    if (!apiV2Key || requireCertificate && !apiCertP12) return null;
     return {
       apiV2Key,
       apiCertP12,
@@ -106,6 +107,25 @@ async function loadPayApiConfig(db) {
   } catch (e) {
     return null;
   }
+}
+
+function verifyWxResponse(response, opts) {
+  if (!response || response.return_code !== 'SUCCESS') throw Object.assign(new Error('微信支付响应未确认'), { code: 'CHANNEL_RESPONSE_INVALID' });
+  const supplied = String(response.sign || '').toUpperCase();
+  const algorithms = response.sign_type ? [response.sign_type] : ['HMAC-SHA256', 'MD5'];
+  const canonical = Object.keys(response).filter(k => k !== 'sign' && response[k] !== undefined && response[k] !== '')
+    .sort().map(k => k + '=' + response[k]).join('&') + '&key=' + opts.apiV2Key;
+  const valid = algorithms.some(algorithm => {
+    if (!['HMAC-SHA256', 'MD5'].includes(algorithm)) return false;
+    const expected = algorithm === 'MD5' ? crypto.createHash('md5').update(canonical).digest('hex').toUpperCase()
+      : wxSignHmacSha256(response, opts.apiV2Key);
+    return supplied.length === expected.length && crypto.timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+  });
+  if (!valid || response.appid !== opts.appId || response.mch_id !== opts.mchId ||
+      opts.subMchId && response.sub_mch_id !== opts.subMchId) {
+    throw Object.assign(new Error('微信支付响应身份或签名不匹配'), { code: 'CHANNEL_RESPONSE_INVALID' });
+  }
+  return response;
 }
 
 // ===== 直连退款 =====
@@ -143,7 +163,7 @@ async function directRefund(opts) {
   params.sign = wxSignHmacSha256(params, apiV2Key);
 
   const xml = buildXml(params);
-  return await httpsPostXml('https://api.mch.weixin.qq.com/secapi/pay/refund', xml, pfxBuffer, passphrase);
+  return verifyWxResponse(await httpsPostXml('https://api.mch.weixin.qq.com/secapi/pay/refund', xml, pfxBuffer, passphrase), opts);
 }
 
 // ===== 直连退款查询（不需要证书）=====
@@ -169,7 +189,7 @@ async function directQueryRefund(opts) {
   params.sign = wxSignHmacSha256(params, apiV2Key);
 
   const xml = buildXml(params);
-  return await httpsPostXml('https://api.mch.weixin.qq.com/pay/refundquery', xml, null, null);
+  return verifyWxResponse(await httpsPostXml('https://api.mch.weixin.qq.com/pay/refundquery', xml, null, null), opts);
 }
 
 // ===== 直连订单查询（不需要证书，用于诊断交易是否在直连商户名下）=====
@@ -190,7 +210,7 @@ async function directOrderQuery(opts) {
   params.sign = wxSignHmacSha256(params, apiV2Key);
 
   const xml = buildXml(params);
-  return await httpsPostXml('https://api.mch.weixin.qq.com/pay/orderquery', xml, null, null);
+  return verifyWxResponse(await httpsPostXml('https://api.mch.weixin.qq.com/pay/orderquery', xml, null, null), opts);
 }
 
 // ===== 校验微信退款响应 =====
@@ -203,6 +223,7 @@ module.exports = {
   buildXml,
   parseWxXml,
   wxSignHmacSha256,
+  verifyWxResponse,
   loadPayApiConfig,
   directRefund,
   directQueryRefund,

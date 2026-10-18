@@ -156,7 +156,7 @@ Page({
       console.log('[order-detail] setData 即将设置, loading→false');
       this.setData({
         order: decoratedOrder,
-        statusDesc: statusDescMap[order.status] || '',
+        statusDesc: (order.paymentResolutionRequired && order.status === 'paid' ? '原单已收款，库存需核对，请按原单申请退款' : order.paymentCloseRequested && order.status === 'pending' ? '正在核对原单支付与关单，请刷新或重试取消' : statusDescMap[order.status]) || '',
         addressRegionText: regionText,
         totalFeeText: (totalFee / 100).toFixed(2),
         originalTotalFeeText: (originalTotalFee / 100).toFixed(2),
@@ -240,14 +240,14 @@ Page({
       const res = await API.requestPayment(this.data.order._id);
       hideLoading();
       
-      if (res && res.mock) {
+      if (res && res.success && (res.mock || res.alreadyPaid || res.reconciled)) {
         this.setData({ submitting: false });
         toast('支付成功', 'success');
         this.loadOrder(this.data.order._id);
         return;
       }
       
-      if (res && res.payment) {
+      if (res && res.success && res.payment) {
         const payment = res.payment;
         let settled = false;
         const guard = setTimeout(() => {
@@ -267,11 +267,13 @@ Page({
         
         wx.requestPayment({
           ...payment,
-          success: () => {
+          success: async () => {
             finish();
             this.setData({ submitting: false });
-            toast('支付成功', 'success');
-            this.loadOrder(this.data.order._id);
+            await this.loadOrder(this.data.order._id);
+            const current = this.data.order;
+            const confirmed = current && ['paid','shipped','received','refunding','refunded'].includes(current.status);
+            toast(confirmed ? (current.paymentResolutionRequired ? '已收款，请按原单核对退款' : '支付成功') : '支付结果核对中，请稍后刷新', confirmed ? 'success' : 'none');
           },
           fail: (payErr) => {
             finish();

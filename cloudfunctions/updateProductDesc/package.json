@@ -4,6 +4,9 @@
   "description": "一次性更新小紫瓶商品详情",
   "main": "index.js",
   "dependencies": {
-    "wx-server-sdk": "~2.6.3"
+    "wx-server-sdk": "2.6.3"
+  },
+  "overrides": {
+    "typescript": "5.9.3"
   }
 }

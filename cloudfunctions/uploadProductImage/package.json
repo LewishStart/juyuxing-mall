@@ -4,6 +4,9 @@
   "description": "一次性上传小紫瓶产品图到云存储并更新商品数据库",
   "main": "index.js",
   "dependencies": {
-    "wx-server-sdk": "~2.6.3"
+    "wx-server-sdk": "2.6.3"
+  },
+  "overrides": {
+    "typescript": "5.9.3"
   }
 }
