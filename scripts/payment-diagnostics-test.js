@@ -56,6 +56,12 @@ const tests = {
   async actualTransferTransportClassifiesWithoutNetwork() {
     const keys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
     const key = keys.privateKey.export({ type: 'pkcs8', format: 'pem' });
+    const platform = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const publicKey = platform.publicKey.export({ type: 'spki', format: 'pem' });
+    const platformId = 'PUB_KEY_ID_3000000001';
+    const env = { WECHATPAY_PLATFORM_PUBLIC_KEY_ID: platformId,
+      WECHATPAY_PLATFORM_PUBLIC_KEY_PATH: '/synthetic/platform.pem',
+      WECHATPAY_PLATFORM_PUBLIC_KEY_EXPIRES_AT: new Date(Date.now() + 86400000).toISOString() };
     let next = { httpCode: 403, body: { code: 'INVALID_REQUEST', message: 'IP rejected PRIVATE-RESPONSE' } };
     let calls = 0;
     const fakeHttps = { request: (options, callback) => {
@@ -63,28 +69,44 @@ const tests = {
       const req = new EventEmitter(); req.write = () => {}; req.destroy = error => req.emit('error', error);
       req.end = () => queueMicrotask(() => {
         const res = new EventEmitter(); res.statusCode = next.httpCode; res.setEncoding = () => {};
-        callback(res); res.emit('data', JSON.stringify(next.body)); res.emit('end');
+        const body = Buffer.from(JSON.stringify(next.body));
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const nonce = 'synthetic-response-nonce';
+        res.headers = { 'wechatpay-timestamp': timestamp, 'wechatpay-nonce': nonce,
+          'wechatpay-serial': platformId,
+          'wechatpay-signature': crypto.sign('RSA-SHA256', Buffer.concat([
+            Buffer.from(timestamp + '\n' + nonce + '\n'), body, Buffer.from('\n')
+          ]), platform.privateKey).toString('base64') };
+        callback(res); res.emit('data', body); res.emit('end');
       });
       return req;
     } };
     const filename = path.join(root, 'cloudfunctions/admin/wxpay-transfer.js');
     const mod = { exports: {} };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module: mod, exports: mod.exports,
-      require: name => name === 'https' ? fakeHttps : name === 'fs' ? { readFileSync: () => key } : require(name),
-      process: { env: {} }, Buffer, console, __dirname: path.dirname(filename) }, { filename });
+      require: name => name === 'https' ? fakeHttps : name === 'fs'
+        ? { readFileSync: file => file === env.WECHATPAY_PLATFORM_PUBLIC_KEY_PATH ? publicKey : key } : require(name),
+      process: { env }, Buffer, console, __dirname: path.dirname(filename) }, { filename });
     const client = mod.exports;
     await assert.rejects(client.initiateTransfer({ amountFen: 100, openid: 'test-agent', outBillNo: 'TEST' }), error => error.code === 'INVALID_REQUEST');
     assert.equal(client.isBillNotExistError({ httpCode: 404, code: 'SYSTEMERROR', message: 'not exist' }), false);
-    assert.equal(client.isBillNotExistError({ code: 'NOT_FOUND' }), true);
-    next = { httpCode: 200, body: { state: 'WAIT_USER_CONFIRM', package_info: 'PRIVATE-PACKAGE', transfer_bill_no: 'TEST' } };
+    assert.equal(client.isBillNotExistError({ code: 'NOT_FOUND' }), false);
+    assert.equal(client.isBillNotExistError({ channelStateTrusted: true, httpCode: 404, code: 'NOT_FOUND' }), true);
+    assert.equal(client.isBillNotExistError({ channelStateTrusted: true, httpCode: 403, code: 'NOT_FOUND' }), false);
+    next = { httpCode: 200, body: { out_bill_no: 'TEST', state: 'WAIT_USER_CONFIRM', package_info: 'PRIVATE-PACKAGE', transfer_bill_no: 'TEST' } };
     assert.equal((await client.initiateTransfer({ amountFen: 100, openid: 'test-agent', outBillNo: 'TEST' })).state, 'WAIT_USER_CONFIRM');
-    next.body = { state: 'SUCCESS' }; assert.equal((await client.queryBill('TEST')).state, 'SUCCESS');
+    next.body = { out_bill_no: 'TEST', state: 'SUCCESS' }; assert.equal((await client.queryBill('TEST')).state, 'SUCCESS');
     assert.equal(calls, 3);
     const missing = { exports: {} };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module: missing, exports: missing.exports,
-      require: name => name === 'https' ? fakeHttps : name === 'fs' ? { readFileSync: () => { throw Object.assign(new Error('PRIVATE-PATH'), { code: 'ENOENT' }); } } : require(name),
-      process: { env: {} }, Buffer, console, __dirname: path.dirname(filename) }, { filename });
-    await assert.rejects(missing.exports.initiateTransfer({ amountFen: 100, openid: 'test-agent' }), error => error.code === 'ENOENT');
+      require: name => name === 'https' ? fakeHttps : name === 'fs' ? { readFileSync: file => {
+        if (file === env.WECHATPAY_PLATFORM_PUBLIC_KEY_PATH) return publicKey;
+        throw Object.assign(new Error('PRIVATE-PATH'), { code: 'ENOENT' });
+      } } : require(name),
+      process: { env }, Buffer, console, __dirname: path.dirname(filename) }, { filename });
+    await assert.rejects(missing.exports.initiateTransfer({ amountFen: 100, openid: 'test-agent', outBillNo: 'TEST-MISSING-SIGNING-KEY' }),
+      error => error.code === 'WECHATPAY_RESPONSE_UNTRUSTED' && error.verificationReason === 'CLIENT_ERROR'
+        && error.outBillNo === 'TEST-MISSING-SIGNING-KEY' && error.requiresReconciliation === true);
     assert.equal(calls, 3, 'missing signature key must fail before HTTP');
   },
   async heldCommissionPagesUseSameMoneyAndReadableState() {
@@ -99,6 +121,8 @@ const tests = {
   },
   async directRefundIsQueriedBeforeSubmissionAndFinalizedOnlyOnMatchingSuccess() {
     const h = createHarness(); const order = h.tables().orders[0]; order.status = 'refunding'; order.refundId = 'rf';
+    order.paymentSubMchId = 'test-merchant';
+    order.inventoryStatus = 'released'; // Transport-only fixture: no stock deduction to restore.
     h.tables().refunds.push({ _id: 'rf', orderId: order._id, type: 'refund_only', status: 'pending', outRefundNo: 'TEST-RF' });
     Object.assign(h.tables().pay_config[0], { apiV2Key: 'test', apiCertP12: Buffer.from('fixture').toString('base64') });
     let submitted = 0; let response = { return_code: 'SUCCESS', result_code: 'FAIL', err_code: 'REFUNDNOTEXIST' };
@@ -131,6 +155,8 @@ const tests = {
   },
   async lostSelfInvocationResponseNeverTriggersSecondRefund() {
     const h = createHarness(); const order = h.tables().orders[0]; order.status = 'refunding'; order.refundId = 'rf';
+    order.paymentSubMchId = 'test-merchant';
+    order.inventoryStatus = 'released'; // Unknown historical stock remains covered by E negative cases.
     h.tables().refunds.push({ _id: 'rf', orderId: order._id, type: 'refund_only', status: 'pending', outRefundNo: 'TEST-RF' });
     h.env = { MINIPROGRAM_APPSECRET: 'fixture-appsecret' };
     let selfCalls = 0;

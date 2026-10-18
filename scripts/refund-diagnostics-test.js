@@ -17,6 +17,7 @@ async function testQuery() {
   const outRefundNo = 'RF' + crypto.createHash('sha256').update(refundId).digest('hex').slice(0, 30);
   const tables = {
     admin_config: [{ _id: 'admin', openId: 'test-owner' }],
+    admin_accounts: [{ _id: 'owner', wechatOpenId: 'test-owner', role: 'owner', status: 'active' }],
     refunds: [{ _id: refundId, orderId: 'test-order', status: 'pending' }],
     orders: [{ _id: 'test-order', orderNo: 'test-order-no', totalFee: 10, transactionId: 'test-payment' }],
     pay_config: [{ _id: 'default', subMchId: 'test-merchant' }]

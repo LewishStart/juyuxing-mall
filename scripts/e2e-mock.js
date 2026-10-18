@@ -4,7 +4,7 @@
 // 运行: node scripts/e2e-mock.js
 //
 // 把 wx-server-sdk 用内存数据库替换,串起所有云函数,
-// 跑完一整套业务流:登录 → 初始化 → 加购 → 用券下单 → 模拟支付
+// 跑完一整套业务流:显式虚构种子 → 登录 → 加购 → 用券下单 → 模拟支付
 // → 支付回调 → 佣金结算 → 提现申请 → 管理员审批 → 提现核销。
 // =============================================================
 
@@ -14,6 +14,7 @@ require('./lib/payment-test-network');
 const path = require('path');
 const Module = require('module');
 const fs = require('fs');
+const crypto = require('crypto');
 const ROOT = path.resolve(__dirname, '..');
 const CF = path.join(ROOT, 'cloudfunctions');
 process.env.CLOUDBASE_CUSTOM_LOGIN_PRIVATE_KEY_ID = 'mock-private-key-id';
@@ -42,6 +43,7 @@ const commandOps = {
   and(...args) { return { __op: 'and', value: args }; },
   or(...args) { return { __op: 'or', value: args }; }
 };
+commandOps.elemMatch = value => ({ __op: 'elemMatch', value });
 const CMD = { ...commandOps, inc: commandOps.inc, in: commandOps.in, neq: commandOps.neq, eq: commandOps.eq };
 
 let currentOpenId = 'mock-customer';
@@ -49,38 +51,34 @@ function setOpenId(id) { currentOpenId = id; }
 
 // 匹配一条 query
 function matchDoc(doc, query) {
-  for (const k of Object.keys(query)) {
-    const v = query[k];
-    if (v && typeof v === 'object' && v.__regexp) {
-      if (!v.__regexp.test(doc[k])) return false;
-    } else if (v && typeof v === 'object' && v.__op) {
-      const field = doc[k];
-      switch (v.__op) {
-        case 'inc': return true; // update-only
-        case 'in': if (!v.value.includes(field)) return false; break;
-        case 'neq': if (field === v.value) return false; break;
-        case 'eq': if (field !== v.value) return false; break;
-        case 'gt': if (!(field > v.value)) return false; break;
-        case 'gte': if (!(field >= v.value)) return false; break;
-        case 'lt': if (!(field < v.value)) return false; break;
-        case 'lte': if (!(field <= v.value)) return false; break;
-        case 'and': if (!v.value.every(q => matchDoc(doc, q))) return false; break;
-        case 'or': if (!v.value.some(q => matchDoc(doc, q))) return false; break;
-        default: return false;
+  const pathValues = (value, parts) => {
+    if (!parts.length) return [value];
+    if (Array.isArray(value)) return value.flatMap(item => pathValues(item, parts));
+    return pathValues(value && value[parts[0]], parts.slice(1));
+  };
+  return Object.entries(query).every(([key, value]) => {
+    const actualValues = pathValues(doc, key.split('.'));
+    const one = actual => {
+      if (value && typeof value === 'object' && value.__regexp) {
+        return value.__regexp.test(String(actual == null ? '' : actual));
       }
-    } else {
-      // 支持点路径: 'agentInfo.status'
-      if (k.indexOf('.') >= 0) {
-        const parts = k.split('.');
-        let cur = doc;
-        for (const p of parts) cur = cur && cur[p];
-        if (cur !== v) return false;
-      } else if (doc[k] !== v) {
-        return false;
+      if (!value || typeof value !== 'object' || !value.__op) return actual === value;
+      switch (value.__op) {
+        case 'in': return value.value.includes(actual);
+        case 'neq': return actual !== value.value;
+        case 'eq': return actual === value.value;
+        case 'gt': return actual > value.value;
+        case 'gte': return actual >= value.value;
+        case 'lt': return actual < value.value;
+        case 'lte': return actual <= value.value;
+        case 'and': return value.value.every(condition => matchDoc(doc, condition));
+        case 'or': return value.value.some(condition => matchDoc(doc, condition));
+        case 'elemMatch': return Array.isArray(actual) && actual.some(item => matchDoc(item, value.value));
+        default: throw new Error('Unsupported E2E query operator: ' + value.__op);
       }
-    }
-  }
-  return true;
+    };
+    return value && value.__op === 'neq' ? actualValues.every(one) : actualValues.some(one);
+  });
 }
 
 function applyUpdate(doc, data) {
@@ -152,7 +150,8 @@ class Collection {
     return { total: docs.length };
   }
   async add({ data }) {
-    const id = 'doc_' + (db._nextId++) + '_' + Math.random().toString(36).slice(2, 8);
+    const id = data._id || 'doc_' + (db._nextId++) + '_' + Math.random().toString(36).slice(2, 8);
+    if (db._store[this._name].some(doc => doc._id === id)) throw new Error('Duplicate document ID');
     const doc = Object.assign({ _id: id, createTime: db._serverNow }, data);
     db._store[this._name].push(doc);
     return { _id: id };
@@ -181,13 +180,10 @@ class Collection {
   }
   async set({ data }) {
     const arr = db._store[this._name];
-    let target = this._docId ? arr.find(x => x._id === this._docId) : null;
-    if (!target) {
-      target = Object.assign({ _id: this._docId || ('doc_' + (db._nextId++) + '_set') }, data);
-      arr.push(target);
-    } else {
-      Object.assign(target, data);
-    }
+    const id = this._docId || ('doc_' + (db._nextId++) + '_set');
+    const index = arr.findIndex(x => x._id === id);
+    const target = { ...data, _id: id };
+    if (index < 0) arr.push(target); else arr[index] = target;
     return { _id: target._id };
   }
 }
@@ -245,7 +241,29 @@ cloud.openapi = {
   }
 };
 // 给真实云支付 refund 一个桩,避免退款流程因为没有云支付凭证而崩
+const channelPayments = new Map();
+function recordChannelPayment(orderNo, transactionId) {
+  const order = db._store.orders.find(item => item.orderNo === orderNo);
+  const record = { returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'SUCCESS',
+    outTradeNo: orderNo, subMchId: order.paymentSubMchId || 'mock-merchant', transactionId,
+    totalFee: order.totalFee, subOpenid: order.userId };
+  channelPayments.set(orderNo, record);
+  return record;
+}
 cloud.cloudPay = {
+  queryOrder: async params => structuredClone(channelPayments.get(params.outTradeNo) || {
+    returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'NOTPAY',
+    outTradeNo: params.outTradeNo, subMchId: params.subMchId
+  }),
+  closeOrder: async params => {
+    const existing = channelPayments.get(params.outTradeNo);
+    if (existing && existing.tradeState === 'SUCCESS') {
+      return { returnCode: 'SUCCESS', resultCode: 'FAIL', errCode: 'ORDERPAID' };
+    }
+    channelPayments.set(params.outTradeNo, { returnCode: 'SUCCESS', resultCode: 'SUCCESS',
+      tradeState: 'CLOSED', outTradeNo: params.outTradeNo, subMchId: params.subMchId });
+    return { returnCode: 'SUCCESS', resultCode: 'SUCCESS' };
+  },
   unifiedOrder: async () => ({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', payment: { timeStamp: '1', nonceStr: 'n', package: 'prepay_id=mock', signType: 'MD5', paySign: 'mock' }, prepayId: 'mock_prepay' }),
   refund: async () => ({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', refundId: 'mock_refund_' + Date.now() })
 };
@@ -294,15 +312,29 @@ function generateOrderNo() {
 // ============== 主流程 ==============
 async function main() {
   console.log('林元元 E2E Mock 验证\n');
-  header('Step 1: 初始化（自动 seed）');
+  header('Step 1: 运行时初始化关闭，显式播种虚构内存数据');
   setOpenId('mock-customer');
   const initRes = (await call('init', { action: 'init' })).result;
-  step('init 完成', initRes.success, 'productId=' + initRes.productId);
-  const productId = initRes.productId;
+  step('运行时 init 拒绝且没有数据写入', !initRes.success &&
+    initRes.code === 'MAINTENANCE_DISABLED' && Object.keys(db._store).length === 0);
+  const productId = 'mock-product';
+  const salt = 'mock-owner-salt';
+  db._store.admin_config = [{ _id: 'admin', openId: 'mock-owner', adminOpenIds: ['mock-owner'] }];
+  db._store.admin_accounts = [{ _id: 'mock-owner-account', username: 'owner', displayName: 'Mock Owner',
+    role: 'owner', status: 'active', wechatOpenId: 'mock-owner',
+    passwordHash: 'scrypt$' + salt + '$' + crypto.scryptSync('owner-password', salt, 64).toString('hex') }];
+  db._store.pay_config = [{ _id: 'default', subMchId: '', useMockPay: false }];
+  db._store.categories = Array.from({ length: 6 }, (_, index) => ({ _id: 'mock-category-' + index,
+    name: 'Mock Category ' + index, parentId: '', sort: index, status: 'on' }));
+  db._store.products = [{ _id: productId, name: '小紫瓶', price: 6900, originalPrice: 7800,
+    categoryId: 'mock-category-0', status: 'on', stock: 1998, reservedStock: 0, sales: 0,
+    specs: [{ name: '13.5g', stock: 999, reservedStock: 0 }, { name: '27g', stock: 999, reservedStock: 0 }],
+    images: ['/images/product-xiaoziping.jpg'], description: 'Synthetic fixture product' }];
   const payConfig = db._store.pay_config.find(item => item._id === 'default');
   step('新环境默认关闭模拟支付', payConfig && payConfig.useMockPay === false && !payConfig.subMchId);
   // 后续主链路显式切换为测试模式，仍需环境变量二次授权。
   payConfig.useMockPay = true;
+  payConfig.subMchId = 'mock-merchant';
   // This historical E2E fixture uses an explicitly configured 15% rate, not the 33% default.
   // The default and configuration precedence are covered by commission-policy-test.js.
   payConfig.commissionRate = 0.15;
@@ -345,9 +377,13 @@ async function main() {
   if (adminCfg) {
     adminCfg.openId = 'mock-owner';
     adminCfg.adminOpenIds = ['mock-owner'];
-    adminCfg.password = 'owner-password';
   }
   setOpenId('mock-owner');
+  const fixtureOwner = db._store.admin_accounts.find(item => item._id === 'mock-owner-account');
+  fixtureOwner.status = 'disabled';
+  const revokedLegacyOwner = (await call('admin', { action: 'checkAdmin' })).result;
+  step('legacy 配置不能绕过账号停用', !revokedLegacyOwner.success);
+  fixtureOwner.status = 'active';
   const invite = (await call('admin', { action: 'createInvite', name: '分销员A', phone: '13800138001' })).result;
   step('B 端生成 7 天邀请', invite.success && invite.invitePath && invite.invitePath.includes('token='));
   const inviteToken = decodeURIComponent(invite.invitePath.split('token=')[1]);
@@ -481,17 +517,21 @@ async function main() {
   let _wdIdForCheck = '';
   // payNotify 回调验证金额、付款身份及幂等性。
   setOpenId('');
+  const originalReceipt = recordChannelPayment(orderNo, orderDoc.transactionId);
+  channelPayments.set(orderNo, { ...originalReceipt, totalFee: 1 });
   const wrongAmountNotify = (await call('payNotify', {
     outTradeNo: orderNo, transactionId: 'WRONG_AMOUNT_TXN', openid: 'mock-customer-B',
     totalFee: 1, resultCode: 'SUCCESS', returnCode: 'SUCCESS'
   })).result;
-  step('支付回调金额不一致时拒绝入账', wrongAmountNotify.errcode !== 0);
+  step('权威查单金额不一致时拒绝入账', wrongAmountNotify.errcode !== 0);
+  channelPayments.set(orderNo, { ...originalReceipt, subOpenid: 'mock-customer-A' });
   const wrongPayerNotify = (await call('payNotify', {
     outTradeNo: orderNo, transactionId: 'WRONG_PAYER_TXN',
     openid: 'mock-platform-payer', subOpenid: 'mock-customer-A',
     totalFee: orderDoc.totalFee, resultCode: 'SUCCESS', returnCode: 'SUCCESS'
   })).result;
-  step('支付回调付款身份不一致时拒绝入账', wrongPayerNotify.errcode !== 0);
+  step('权威查单付款身份不一致时拒绝入账', wrongPayerNotify.errcode !== 0);
+  channelPayments.set(orderNo, originalReceipt);
   const notify = (await call('payNotify', {
     outTradeNo: orderNo, transactionId: 'MOCK_TXN_001', openid: 'mock-customer-B',
     totalFee: orderDoc.totalFee, resultCode: 'SUCCESS', returnCode: 'SUCCESS'
@@ -548,6 +588,9 @@ async function main() {
   header('Step 4.6: 真实格式支付回调 + 管理员发货');
   // CloudBase 官方回调使用 snake_case 字段；该格式必须能把 pending 订单落成 paid。
   setOpenId('');
+  // This positive callback fixture represents a pre-existing original merchant binding.
+  Object.assign(multiOrderDoc, { paymentSubMchId: 'mock-merchant', paymentPhase: 'open', prepayId: 'SYNTHETIC-ORIGINAL-PREPAY' });
+  recordChannelPayment(multiOrderNo, 'MOCK_TXN_REAL_SHAPE');
   const realShapeNotify = (await call('payNotify', {
     out_trade_no: multiOrderNo,
     transaction_id: 'MOCK_TXN_REAL_SHAPE',
@@ -603,6 +646,9 @@ async function main() {
   db._store.orders.push({
     _id: 'mock-notify-failure-order',
     orderNo: 'MOCK_NOTIFY_FAILURE',
+    paymentSubMchId: 'mock-merchant',
+    paymentPhase: 'open',
+    prepayId: 'SYNTHETIC-ORIGINAL-PREPAY',
     userId: 'mock-customer-B',
     totalFee: 100,
     status: 'pending',
@@ -624,6 +670,7 @@ async function main() {
     return query;
   };
   setOpenId('');
+  recordChannelPayment('MOCK_NOTIFY_FAILURE', 'MOCK_TXN_FAILURE');
   const retryableNotify = (await call('payNotify', {
     out_trade_no: 'MOCK_NOTIFY_FAILURE',
     transaction_id: 'MOCK_TXN_FAILURE',

@@ -13,10 +13,11 @@ function harness() {
   let tables = {
     admin_config: [{ _id: 'admin', openId: 'owner-wx' }],
     admin_accounts: [{ _id: 'owner', wechatOpenId: 'owner-wx', role: 'owner', status: 'active' }],
+    users: [{ _id: 'agent' }], // Existing commission owner supplies the same-agent conflict fence.
     refunds: [{ _id: 'rf', orderId: 'order', status: 'pending_auto', outRefundNo: 'RF-test',
       approvedAmount: 100, subMchId: 'merchant', executionVersion: 2, restock: true, type: 'refund_only', processTime: new Date(0) }],
     orders: [{ _id: 'order', orderNo: 'ORDER-test', totalFee: 100, transactionId: 'TX-test',
-      status: 'refunding', refundId: 'rf', agentId: 'agent', items: [{ productId: 'product', spec: 'sku', quantity: 1 }] }],
+      status: 'refunding', inventoryStatus: 'committed', refundId: 'rf', agentId: 'agent', items: [{ productId: 'product', spec: 'sku', quantity: 1 }] }],
     products: [{ _id: 'product', stock: 2, sales: 1, specs: [{ name: 'sku', stock: 2 }] }],
     commissions: [{ _id: 'commission', orderId: 'order', agentId: 'agent', status: 'frozen', amount: 33 }],
     cashflow_entries: [], inventory_adjustments: [], pay_config: [{ _id: 'default', subMchId: 'merchant' }]

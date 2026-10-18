@@ -7,7 +7,8 @@
     "admin": "python3 -m http.server 8765 --directory admin-web",
     "smoke": "node scripts/smoke-test.js",
     "test:brand": "node scripts/brand-rename-test.js",
-    "verify": "npm run smoke && node scripts/e2e-mock.js && node scripts/withdrawal-consistency-test.js && node scripts/payment-diagnostics-test.js && node scripts/refund-consistency-test.js && node scripts/refund-diagnostics-test.js && node scripts/refund-operator-ui-test.js && node scripts/commission-policy-test.js && node scripts/auth-context-test.js && node scripts/page-load-logic-test.js && node scripts/admin-qr-auth-test.js && node scripts/release-gap-test.js && npm run lint:functions",
+    "test:prelaunch": "node scripts/prelaunch-remediation-test.js --self-check && node scripts/prelaunch-remediation-test.js --all",
+    "verify": "npm run test:prelaunch && npm run smoke && node scripts/e2e-mock.js && node scripts/withdrawal-consistency-test.js && node scripts/payment-diagnostics-test.js && node scripts/refund-consistency-test.js && node scripts/refund-diagnostics-test.js && node scripts/refund-operator-ui-test.js && node scripts/commission-policy-test.js && node scripts/auth-context-test.js && node scripts/page-load-logic-test.js && node scripts/admin-qr-auth-test.js && node scripts/release-gap-test.js && npm run lint:functions",
     "setup": "bash scripts/setup.sh",
     "lint:functions": "for f in cloudfunctions/*/index.js; do node --check \"$f\" || exit 1; done"
   },
